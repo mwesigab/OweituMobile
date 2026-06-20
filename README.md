@@ -1,97 +1,150 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Oweitu Delivery
 
-# Getting Started
+Oweitu Delivery is a Flutter food-ordering application for Oweitu Cafe. It
+provides menu browsing, cart and checkout flows, delivery tracking, rewards,
+offers, account management, and customer-support screens.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+> **Project status:** The user interface and local ordering flows are under
+> active development. Application state is currently held in memory and the
+> backend methods are placeholders; authentication, payments, and live order
+> data are not yet connected to production services.
 
-## Step 1: Start Metro
+## Features
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+- Guest menu browsing and search
+- Food categories, item details, favourites, and popular picks
+- Cart quantities, special instructions, and promotional codes
+- Delivery and takeaway checkout flows
+- Saved delivery address selection
+- Order confirmation, history, and tracking
+- Rewards and points screens
+- Deals, notifications, e-gift cards, gallery, and support screens
+- Sign-in, registration, password recovery, profile, and settings interfaces
+- Responsive layouts and bundled menu imagery
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+## Technology
 
-```sh
-# Using npm
-npm start
+- Flutter with Material 3
+- Dart SDK `^3.11.5`
+- `ChangeNotifier` and `InheritedNotifier` for application state
+- Flutter widget tests
 
-# OR using Yarn
-yarn start
-```
+The repository contains Flutter targets for Android, iOS, web, Windows, macOS,
+and Linux.
 
-## Step 2: Build and run your app
+## Requirements
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+Install the following before running the project:
 
-### Android
+- [Flutter SDK](https://docs.flutter.dev/get-started/install) with a compatible
+  Dart SDK
+- Platform tooling for the target you intend to run, such as Android Studio,
+  Xcode, Chrome, or Visual Studio
 
-```sh
-# Using npm
-npm run android
-
-# OR using Yarn
-yarn android
-```
-
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
-
-```sh
-bundle install
-```
-
-Then, and every time you update your native dependencies, run:
-
-```sh
-bundle exec pod install
-```
-
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+Confirm the local environment is ready:
 
 ```sh
-# Using npm
-npm run ios
-
-# OR using Yarn
-yarn ios
+flutter doctor
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+## Getting started
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+Clone the repository, open its root directory, and install dependencies:
 
-## Step 3: Modify your app
+```sh
+flutter pub get
+```
 
-Now that you have successfully run the app, let's make changes!
+Run the app on an available device:
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
+```sh
+flutter devices
+flutter run
+```
 
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
+To select a specific device:
 
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
+```sh
+flutter run -d <device-id>
+```
 
-## Congratulations! :tada:
+## Quality checks
 
-You've successfully run and modified your React Native App. :partying_face:
+Format and analyze the code:
 
-### Now what?
+```sh
+dart format .
+flutter analyze
+```
 
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
+Run the widget tests:
 
-# Troubleshooting
+```sh
+flutter test
+```
 
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
+Create a release build using the command appropriate for the target platform,
+for example:
 
-# Learn More
+```sh
+flutter build apk --release
+flutter build appbundle --release
+flutter build web --release
+```
 
-To learn more about React Native, take a look at the following resources:
+## Project structure
 
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+```text
+.
+|-- lib/
+|   `-- main.dart          # App state, models, screens, and widgets
+|-- assets/
+|   |-- images/            # Menu and branding imagery
+|   `-- icons/             # Application icons
+|-- test/
+|   `-- widget_test.dart   # Main user-flow widget tests
+|-- android/               # Android runner
+|-- ios/                   # iOS runner
+|-- web/                   # Web runner
+|-- windows/               # Windows runner
+|-- macos/                 # macOS runner
+|-- linux/                 # Linux runner
+`-- pubspec.yaml           # Dependencies and asset declarations
+```
+
+Most application code currently resides in `lib/main.dart`. As the app grows,
+it should be separated into feature, model, service, and shared-widget modules.
+
+## Backend integration
+
+`ApiService` in `lib/main.dart` describes the intended API surface and currently
+throws `UnimplementedError`. Its configured base URL is:
+
+```text
+https://api.oweitu.com
+```
+
+Before a production release:
+
+1. Move the base URL into environment-specific configuration.
+2. Implement authentication, menu, checkout, and order endpoints.
+3. Store credentials using secure device storage.
+4. Persist appropriate cart and account state.
+5. Connect and verify the payment providers.
+6. Add integration and end-to-end tests for critical ordering flows.
+
+Never commit production credentials, signing secrets, or payment keys to the
+repository.
+
+## Assets
+
+Asset directories are registered in `pubspec.yaml`. When adding a new asset,
+place it in an existing registered directory or update the `flutter.assets`
+section, then run:
+
+```sh
+flutter pub get
+```
+
+Use exact, case-sensitive asset paths so builds work consistently across all
+platforms.

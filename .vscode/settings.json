@@ -1,11 +1,8 @@
 {
   "editor.formatOnSave": true,
-  "editor.codeActionsOnSave": {
-    "source.fixAll.eslint": "explicit"
-  },
-  "typescript.tsdk": "node_modules/typescript/lib",
-  "files.exclude": {
-    "**/.expo": true,
-    "**/node_modules": false
+  "[dart]": {
+    "editor.defaultFormatter": "Dart-Code.dart-code",
+    "editor.formatOnSave": true,
+    "editor.rulers": [80]
   }
 }
