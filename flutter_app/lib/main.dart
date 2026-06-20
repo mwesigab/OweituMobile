@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 void main() {
   runApp(const OweituApp());
@@ -67,9 +68,7 @@ class _OweituAppState extends State<OweituApp> {
                 ),
               ),
             ),
-            home: state.isAuthenticated
-                ? const HomeShell()
-                : const LoginScreen(),
+            home: const HomeShell(),
           );
         },
       ),
@@ -77,20 +76,48 @@ class _OweituAppState extends State<OweituApp> {
   }
 }
 
-// ─── STATE ───────────────────────────────────────────────────────────────────
-
 class AppState extends ChangeNotifier {
   bool isAuthenticated = false;
   final List<Order> orders = [];
   final List<CartItem> cart = [];
   final Set<String> favorites = {};
+  final List<AppNotification> notifications = [
+    const AppNotification(
+      icon: Icons.local_offer_outlined,
+      title: 'Special Offer!',
+      body: 'Get 20% off your next order with code WELCOME20',
+      time: '2 min ago',
+      unread: true,
+    ),
+    const AppNotification(
+      icon: Icons.delivery_dining_outlined,
+      title: 'Order on the way',
+      body: 'Your order ORD-123 is out for delivery!',
+      time: '1 hr ago',
+      unread: true,
+    ),
+    const AppNotification(
+      icon: Icons.workspace_premium_outlined,
+      title: 'You earned 50 points!',
+      body: 'Keep ordering to unlock your next reward.',
+      time: 'Yesterday',
+      unread: false,
+    ),
+  ];
   DeliveryAddress? selectedAddress;
   String? promoCodeApplied;
   int promoDiscountAmount = 0;
+  String deliveryType = 'Delivery';
+  String profileName = 'AIJUKA JOSHUA';
+  String profileEmail = 'joshuaaijuka10@gmail.com';
+  String profilePhone = '769 583 353';
 
   int get itemCount => cart.length;
   int get cartSubtotal => cart.fold(0, (sum, i) => sum + i.total);
   int get cartTotal => (cartSubtotal - promoDiscountAmount).clamp(0, 999999999);
+  bool get isDeliveryValid => deliveryType == 'Takeaway' || cartTotal >= 10000;
+  int get unreadNotificationCount =>
+      notifications.where((notification) => notification.unread).length;
 
   void signIn() {
     isAuthenticated = true;
@@ -105,6 +132,7 @@ class AppState extends ChangeNotifier {
     selectedAddress = null;
     promoCodeApplied = null;
     promoDiscountAmount = 0;
+    deliveryType = 'Delivery';
     notifyListeners();
   }
 
@@ -152,9 +180,19 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Returns true if promo was valid
+  void setDeliveryType(String type) {
+    deliveryType = type;
+    notifyListeners();
+  }
+
+  void markAllNotificationsRead() {
+    for (var i = 0; i < notifications.length; i++) {
+      notifications[i] = notifications[i].copyWith(unread: false);
+    }
+    notifyListeners();
+  }
+
   bool applyPromo(String code) {
-    // TODO: validate against .NET backend — POST /api/promos/validate
     final upper = code.trim().toUpperCase();
     if (upper == 'OWEITU10') {
       promoCodeApplied = upper;
@@ -178,7 +216,6 @@ class AppState extends ChangeNotifier {
   }
 
   void placeOrder() {
-    // TODO: POST /api/orders with cart + address + promo
     final id = 'ORD-${DateTime.now().millisecondsSinceEpoch}';
     orders.insert(
       0,
@@ -186,9 +223,12 @@ class AppState extends ChangeNotifier {
         id: id,
         items: List.from(cart),
         total: cartTotal,
-        address: selectedAddress?.label ?? 'Not specified',
+        address: deliveryType == 'Takeaway'
+            ? 'Takeaway'
+            : (selectedAddress?.label ?? 'Not specified'),
         placedAt: DateTime.now(),
         status: OrderStatus.placed,
+        deliveryType: deliveryType,
       ),
     );
     clearCart();
@@ -203,7 +243,30 @@ class AppScope extends InheritedNotifier<AppState> {
       context.dependOnInheritedWidgetOfExactType<AppScope>()!.notifier!;
 }
 
-// ─── MODELS ──────────────────────────────────────────────────────────────────
+void requestCheckoutAuth(
+  BuildContext context,
+  AppState state, {
+  bool closeCurrent = false,
+}) {
+  final navigator = Navigator.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  if (closeCurrent) {
+    navigator.pop();
+  }
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      const SnackBar(
+        content: Text('Please sign up or log in to checkout.'),
+        backgroundColor: AppColors.coral,
+      ),
+    );
+  navigator.push(
+    MaterialPageRoute(
+      builder: (_) => AppScope(state: state, child: const LoginScreen()),
+    ),
+  );
+}
 
 class MenuItem {
   const MenuItem({
@@ -288,6 +351,7 @@ class Order {
     required this.placedAt,
     this.status = OrderStatus.placed,
     this.estimatedMinutes,
+    required this.deliveryType,
   });
   final String id;
   final List<CartItem> items;
@@ -296,6 +360,7 @@ class Order {
   final DateTime placedAt;
   OrderStatus status;
   final int? estimatedMinutes;
+  final String deliveryType;
 
   String get statusLabel {
     switch (status) {
@@ -345,16 +410,9 @@ class DeliveryAddress {
   final bool isDefault;
 }
 
-// ─── API SERVICE LAYER (ready for .NET backend) ──────────────────────────────
-// All methods are stubs — wire up to your C# .NET REST API.
-// Base URL should be set from environment/config.
-
 class ApiService {
-  static const String baseUrl =
-      'https://api.oweitu.com'; // TODO: set from config
+  static const String baseUrl = 'https://api.oweitu.com';
 
-  // AUTH
-  // POST /api/auth/login
   static Future<Map<String, dynamic>> login({
     required String identifier,
     required String password,
@@ -362,7 +420,6 @@ class ApiService {
     throw UnimplementedError('Wire to POST $baseUrl/api/auth/login');
   }
 
-  // POST /api/auth/register
   static Future<Map<String, dynamic>> register({
     required String name,
     required String identifier,
@@ -371,7 +428,6 @@ class ApiService {
     throw UnimplementedError('Wire to POST $baseUrl/api/auth/register');
   }
 
-  // POST /api/auth/social
   static Future<Map<String, dynamic>> socialLogin({
     required String provider,
     required String token,
@@ -379,38 +435,30 @@ class ApiService {
     throw UnimplementedError('Wire to POST $baseUrl/api/auth/social');
   }
 
-  // POST /api/auth/forgot-password
   static Future<void> forgotPassword({required String identifier}) async {
     throw UnimplementedError('Wire to POST $baseUrl/api/auth/forgot-password');
   }
 
-  // MENU
-  // GET /api/menu/categories
   static Future<List<Map<String, dynamic>>> getCategories() async {
     throw UnimplementedError('Wire to GET $baseUrl/api/menu/categories');
   }
 
-  // GET /api/menu/items?categoryId={id}
   static Future<List<Map<String, dynamic>>> getMenuItems({
     String? categoryId,
   }) async {
     throw UnimplementedError('Wire to GET $baseUrl/api/menu/items');
   }
 
-  // GET /api/menu/search?q={query}
   static Future<List<Map<String, dynamic>>> searchMenu({
     required String query,
   }) async {
     throw UnimplementedError('Wire to GET $baseUrl/api/menu/search?q=$query');
   }
 
-  // GET /api/menu/featured
   static Future<List<Map<String, dynamic>>> getFeaturedItems() async {
     throw UnimplementedError('Wire to GET $baseUrl/api/menu/featured');
   }
 
-  // ORDERS
-  // POST /api/orders
   static Future<Map<String, dynamic>> placeOrder({
     required List<CartItem> items,
     required String addressId,
@@ -420,25 +468,20 @@ class ApiService {
     throw UnimplementedError('Wire to POST $baseUrl/api/orders');
   }
 
-  // GET /api/orders?userId={id}
   static Future<List<Map<String, dynamic>>> getOrderHistory() async {
     throw UnimplementedError('Wire to GET $baseUrl/api/orders');
   }
 
-  // GET /api/orders/{id}/track
   static Future<Map<String, dynamic>> trackOrder({
     required String orderId,
   }) async {
     throw UnimplementedError('Wire to GET $baseUrl/api/orders/$orderId/track');
   }
 
-  // ADDRESSES
-  // GET /api/addresses
   static Future<List<Map<String, dynamic>>> getAddresses() async {
     throw UnimplementedError('Wire to GET $baseUrl/api/addresses');
   }
 
-  // POST /api/addresses
   static Future<Map<String, dynamic>> saveAddress({
     required String label,
     required String fullAddress,
@@ -448,37 +491,28 @@ class ApiService {
     throw UnimplementedError('Wire to POST $baseUrl/api/addresses');
   }
 
-  // DELETE /api/addresses/{id}
   static Future<void> deleteAddress({required String id}) async {
     throw UnimplementedError('Wire to DELETE $baseUrl/api/addresses/$id');
   }
 
-  // PROMOS
-  // POST /api/promos/validate
   static Future<Map<String, dynamic>> validatePromo({
     required String code,
   }) async {
     throw UnimplementedError('Wire to POST $baseUrl/api/promos/validate');
   }
 
-  // FAVORITES
-  // GET /api/favorites
   static Future<List<String>> getFavorites() async {
     throw UnimplementedError('Wire to GET $baseUrl/api/favorites');
   }
 
-  // POST /api/favorites
   static Future<void> toggleFavorite({required String itemName}) async {
     throw UnimplementedError('Wire to POST $baseUrl/api/favorites');
   }
 
-  // NOTIFICATIONS
-  // GET /api/notifications
   static Future<List<Map<String, dynamic>>> getNotifications() async {
     throw UnimplementedError('Wire to GET $baseUrl/api/notifications');
   }
 
-  // POST /api/notifications/{id}/read
   static Future<void> markNotificationRead({
     required String notificationId,
   }) async {
@@ -487,21 +521,16 @@ class ApiService {
     );
   }
 
-  // PROFILE
-  // GET /api/profile
   static Future<Map<String, dynamic>> getProfile() async {
     throw UnimplementedError('Wire to GET $baseUrl/api/profile');
   }
 
-  // PUT /api/profile
   static Future<void> updateProfile({
     required Map<String, dynamic> data,
   }) async {
     throw UnimplementedError('Wire to PUT $baseUrl/api/profile');
   }
 
-  // REVIEWS
-  // POST /api/reviews
   static Future<void> submitReview({
     required String orderId,
     required int rating,
@@ -510,25 +539,18 @@ class ApiService {
     throw UnimplementedError('Wire to POST $baseUrl/api/reviews');
   }
 
-  // BRANCHES
-  // GET /api/branches
   static Future<List<Map<String, dynamic>>> getBranches() async {
     throw UnimplementedError('Wire to GET $baseUrl/api/branches');
   }
 
-  // REWARDS / LOYALTY
-  // GET /api/rewards/points
   static Future<Map<String, dynamic>> getRewardsPoints() async {
     throw UnimplementedError('Wire to GET $baseUrl/api/rewards/points');
   }
 
-  // GET /api/rewards/history
   static Future<List<Map<String, dynamic>>> getRewardsHistory() async {
     throw UnimplementedError('Wire to GET $baseUrl/api/rewards/history');
   }
 
-  // PAYMENTS
-  // POST /api/payments/initialize
   static Future<Map<String, dynamic>> initializePayment({
     required int amount,
     required String method,
@@ -537,8 +559,6 @@ class ApiService {
     throw UnimplementedError('Wire to POST $baseUrl/api/payments/initialize');
   }
 
-  // GIFT CARDS
-  // POST /api/giftcards/send
   static Future<void> sendGiftCard({
     required String recipientPhone,
     required int amount,
@@ -546,7 +566,6 @@ class ApiService {
     throw UnimplementedError('Wire to POST $baseUrl/api/giftcards/send');
   }
 
-  // POST /api/giftcards/redeem
   static Future<Map<String, dynamic>> redeemGiftCard({
     required String code,
   }) async {
@@ -554,32 +573,107 @@ class ApiService {
   }
 }
 
-// ─── MENU DATA ───────────────────────────────────────────────────────────────
-
 const snacks = [
-  MenuItem(name: 'Chips, 2 Pcs of Chicken and a Soda', price: 17000),
-  MenuItem(name: 'Chips, 3 Pcs of Chicken and a Soda', price: 23000),
-  MenuItem(name: 'Chips, 4 Pcs of Chicken and a Soda', price: 27000),
-  MenuItem(name: '5 Pcs Chicken, 2 Regular Chips & 2 Drinks', price: 35000),
-  MenuItem(name: 'Chips Liver and Drink', price: 14000),
-  MenuItem(name: 'Chips Beef and Drink', price: 14000),
-  MenuItem(name: 'Stewed Rice, Liver and Drink', price: 14000),
-  MenuItem(name: 'Stewed Rice, Beef and Drink', price: 14000),
-  MenuItem(name: 'Pair of Sausages, Chips and Drink', price: 11000),
-  MenuItem(name: 'Whole Fish, Chips and Drink', price: 26000),
-  MenuItem(name: 'Chips, 1 Chap and 1 Drink', price: 12000),
-  MenuItem(name: 'Palau Beef and a Drink', price: 14000),
-  MenuItem(name: 'Chicken / Beef Burger, Chips and Drink', price: 25000),
-  MenuItem(name: 'Chips, Goats Meat and a Drink', price: 17000),
+  MenuItem(
+    name: 'Chips, 2 Pcs of Chicken and a Soda',
+    price: 17000,
+    imagePath: 'assets/images/Beef/2pacs of chicken and Chips.jpg',
+  ),
+  MenuItem(
+    name: 'Chips, 3 Pcs of Chicken and a Soda',
+    price: 23000,
+    imagePath: 'assets/images/3pacs of chicken and soda.jpg',
+  ),
+  MenuItem(
+    name: 'Chips, 4 Pcs of Chicken and a Soda',
+    price: 27000,
+    imagePath: 'assets/images/Beef/4pacs of chicken and Chips.jpg',
+  ),
+  MenuItem(
+    name: '5 Pcs Chicken, 2 Regular Chips & 2 Drinks',
+    price: 35000,
+    imagePath: 'assets/images/Beef/5pacs of chicken and Chips.jpg',
+  ),
+  MenuItem(
+    name: 'Chips Liver and Drink',
+    price: 14000,
+    imagePath: 'assets/images/Beef/Chips and Liver.jpg',
+  ),
+  MenuItem(
+    name: 'Chips Beef and Drink',
+    price: 14000,
+    imagePath: 'assets/images/Beef/Chips and Beef.jpg',
+  ),
+  MenuItem(
+    name: 'Stewed Rice, Liver and Drink',
+    price: 14000,
+    imagePath: 'assets/images/Beef/Stewed Rice and Liver.jpg',
+  ),
+  MenuItem(
+    name: 'Stewed Rice, Beef and Drink',
+    price: 14000,
+    imagePath: 'assets/images/Beef/Stewed Rice and Beef.jpg',
+  ),
+  MenuItem(
+    name: 'Pair of Sausages, Chips and Drink',
+    price: 11000,
+    imagePath: 'assets/images/Beef/Pair of Sausages and Chips.jpg',
+  ),
+  MenuItem(
+    name: 'Whole Fish, Chips and Drink',
+    price: 26000,
+    imagePath: 'assets/images/Beef/Whole Fish and Chips .jpg',
+  ),
+  MenuItem(
+    name: 'Chips, 1 Chap and 1 Drink',
+    price: 12000,
+    imagePath: 'assets/images/Beef/Chips and 1 chap.jpg',
+  ),
+  MenuItem(
+    name: 'Palau Beef and a Drink',
+    price: 14000,
+    imagePath: 'assets/images/Beef/Pilawo and Beef.jpg',
+  ),
+  MenuItem(
+    name: 'Chicken / Beef Burger, Chips and Drink',
+    price: 25000,
+    imagePath: 'assets/images/Beef/Beef Burger and Chips.jpg',
+  ),
+  MenuItem(
+    name: 'Chips, Goats Meat and a Drink',
+    price: 17000,
+    imagePath: "assets/images/Beef/Chips and Goat's meat.jpg",
+  ),
   MenuItem(
     name: 'Half Chips, Half Rice with Liver / Gravy / Beef',
     price: 16000,
+    imagePath: 'assets/images/Beef/Rice with LIver.jpg',
   ),
-  MenuItem(name: 'Beef / Liver Plain', price: 7000),
-  MenuItem(name: 'Plain Chips', price: 7000),
-  MenuItem(name: 'Fish Fillet Plain (2 Pcs)', price: 11000),
-  MenuItem(name: 'Pilawo Plain', price: 7000),
-  MenuItem(name: 'Plain Chicken', price: 9000),
+  MenuItem(
+    name: 'Beef / Liver Plain',
+    price: 7000,
+    imagePath: 'assets/images/Beef/Liver Plain.jpg',
+  ),
+  MenuItem(
+    name: 'Plain Chips',
+    price: 7000,
+    imagePath: 'assets/images/Plain Chips.jpg',
+  ),
+  MenuItem(
+    name: 'Fish Fillet Plain (2 Pcs)',
+    price: 11000,
+    imagePath: 'assets/images/Fish Fillet Plain.jpg',
+  ),
+  MenuItem(
+    name: 'Pilawo Plain',
+    price: 7000,
+    imagePath: 'assets/images/Pilawo Plain.jpg',
+  ),
+  MenuItem(
+    name: 'Plain Chicken',
+    price: 9000,
+    imagePath: 'assets/images/Plain Chicken.jpg',
+  ),
 ];
 
 const breakfast = [
@@ -791,7 +885,6 @@ const pizzas = [
   ),
 ];
 
-// Flat list of all items for search
 List<MenuItem> get allMenuItems {
   final List<MenuItem> all = [
     ...snacks,
@@ -800,7 +893,6 @@ List<MenuItem> get allMenuItems {
     ...drinks,
     ...teas,
   ];
-  // Add pizzas (small price as representative)
   for (final p in pizzas) {
     all.add(
       MenuItem(
@@ -813,8 +905,6 @@ List<MenuItem> get allMenuItems {
   }
   return all;
 }
-
-// ─── MENU CATEGORY DEFINITIONS ───────────────────────────────────────────────
 
 class MenuCategoryDef {
   const MenuCategoryDef({
@@ -876,8 +966,6 @@ const menuCategories = [
   ),
 ];
 
-// ─── AUTH SCREEN (Sign In / Sign Up) ─────────────────────────────────────────
-
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -902,15 +990,22 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
+  Future<void> _completeAuth() async {
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    AppScope.of(context).signIn();
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Background image
           Image.asset('assets/images/Login.jpg', fit: BoxFit.cover),
-          // Dark gradient scrim — heavier at bottom where the card sits
           Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
@@ -932,7 +1027,6 @@ class _LoginScreenState extends State<LoginScreen>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const SizedBox(height: 32),
-                  // Brand
                   Text(
                     'Oweitu Cafe',
                     textAlign: TextAlign.center,
@@ -962,8 +1056,6 @@ class _LoginScreenState extends State<LoginScreen>
                     ),
                   ),
                   const SizedBox(height: 36),
-
-                  // Card
                   Container(
                     decoration: BoxDecoration(
                       color: Colors.white,
@@ -979,7 +1071,6 @@ class _LoginScreenState extends State<LoginScreen>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        // Tab bar: Sign In | Sign Up
                         ClipRRect(
                           borderRadius: const BorderRadius.vertical(
                             top: Radius.circular(20),
@@ -1009,25 +1100,16 @@ class _LoginScreenState extends State<LoginScreen>
                             ),
                           ),
                         ),
-
-                        // Tab content
                         Padding(
                           padding: const EdgeInsets.fromLTRB(20, 20, 20, 22),
                           child: _tabs.index == 0
-                              ? _SignInForm(
-                                  onSignIn: () => AppScope.of(context).signIn(),
-                                )
-                              : _SignUpForm(
-                                  onSignUp: () => AppScope.of(context).signIn(),
-                                ),
+                              ? _SignInForm(onSignIn: _completeAuth)
+                              : _SignUpForm(onSignUp: _completeAuth),
                         ),
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 24),
-
-                  // OR divider
                   Row(
                     children: [
                       const Expanded(
@@ -1049,10 +1131,7 @@ class _LoginScreenState extends State<LoginScreen>
                       ),
                     ],
                   ),
-
                   const SizedBox(height: 16),
-
-                  // Social buttons — row 1
                   Row(
                     children: [
                       Expanded(
@@ -1061,29 +1140,30 @@ class _LoginScreenState extends State<LoginScreen>
                           color: Colors.white,
                           textColor: const Color(0xFF3C4043),
                           borderColor: const Color(0xFFDDDDDD),
-                          icon: _GoogleIcon(),
-                          onTap: () => AppScope.of(context).signIn(),
+                          icon: const _AssetLogo(
+                            path:
+                                'assets/images/google-logo-transparent-free-png-removebg-preview.png',
+                          ),
+                          onTap: () => _completeAuth(),
                         ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: _SocialButton(
-                          label: 'Facebook',
-                          color: const Color(0xFF1877F2),
+                          label: 'Phone',
+                          color: AppColors.sage,
                           textColor: Colors.white,
                           icon: const Icon(
-                            Icons.facebook,
+                            Icons.phone_android,
                             color: Colors.white,
                             size: 18,
                           ),
-                          onTap: () => AppScope.of(context).signIn(),
+                          onTap: () => _completeAuth(),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
-
-                  // Social buttons — row 2
                   Row(
                     children: [
                       Expanded(
@@ -1091,16 +1171,16 @@ class _LoginScreenState extends State<LoginScreen>
                           label: 'TikTok',
                           color: Colors.black,
                           textColor: Colors.white,
-                          icon: _TikTokIcon(),
-                          onTap: () => AppScope.of(context).signIn(),
+                          icon: const _AssetLogo(
+                            path: 'assets/images/Tiktok-removebg-preview.png',
+                          ),
+                          onTap: () => _completeAuth(),
                         ),
                       ),
-                      // Empty right slot keeps TikTok at half-width like siblings
                       const SizedBox(width: 10),
                       const Expanded(child: SizedBox()),
                     ],
                   ),
-
                   const SizedBox(height: 24),
                   Text(
                     'By continuing you agree to our Terms of Service\nand Privacy Policy.',
@@ -1121,11 +1201,45 @@ class _LoginScreenState extends State<LoginScreen>
   }
 }
 
-// ─── SIGN IN FORM ─────────────────────────────────────────────────────────────
-
-class _SignInForm extends StatelessWidget {
+class _SignInForm extends StatefulWidget {
   const _SignInForm({required this.onSignIn});
-  final VoidCallback onSignIn;
+  final Future<void> Function() onSignIn;
+
+  @override
+  State<_SignInForm> createState() => _SignInFormState();
+}
+
+class _SignInFormState extends State<_SignInForm> {
+  final _identifierCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  String? _identifierError;
+  String? _passwordError;
+  bool _loading = false;
+
+  @override
+  void dispose() {
+    _identifierCtrl.dispose();
+    _passwordCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    FocusScope.of(context).unfocus();
+    final identifier = _identifierCtrl.text.trim();
+    final password = _passwordCtrl.text;
+    setState(() {
+      _identifierError = identifier.isEmpty
+          ? 'Enter your email or phone'
+          : null;
+      _passwordError = password.isEmpty ? 'Enter your password' : null;
+    });
+    if (_identifierError != null || _passwordError != null) return;
+    setState(() => _loading = true);
+    await widget.onSignIn();
+    if (mounted) {
+      setState(() => _loading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1149,9 +1263,21 @@ class _SignInForm extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 18),
-        const _InputField(hint: 'Email or phone number'),
+        _InputField(
+          hint: 'Email or phone number',
+          controller: _identifierCtrl,
+          keyboardType: TextInputType.emailAddress,
+          errorText: _identifierError,
+          onChanged: (_) => setState(() => _identifierError = null),
+        ),
         const SizedBox(height: 10),
-        const _InputField(hint: 'Password', obscure: true),
+        _InputField(
+          hint: 'Password',
+          controller: _passwordCtrl,
+          obscure: true,
+          errorText: _passwordError,
+          onChanged: (_) => setState(() => _passwordError = null),
+        ),
         const SizedBox(height: 6),
         Align(
           alignment: Alignment.centerRight,
@@ -1180,8 +1306,8 @@ class _SignInForm extends StatelessWidget {
         SizedBox(
           height: 46,
           child: ElevatedButton(
-            onPressed: onSignIn,
-            child: const Text('Sign In'),
+            onPressed: _loading ? null : _submit,
+            child: _loading ? const _ButtonSpinner() : const Text('Sign In'),
           ),
         ),
       ],
@@ -1189,18 +1315,63 @@ class _SignInForm extends StatelessWidget {
   }
 }
 
-// ─── SIGN UP FORM ─────────────────────────────────────────────────────────────
-
 class _SignUpForm extends StatefulWidget {
   const _SignUpForm({required this.onSignUp});
-  final VoidCallback onSignUp;
+  final Future<void> Function() onSignUp;
 
   @override
   State<_SignUpForm> createState() => _SignUpFormState();
 }
 
 class _SignUpFormState extends State<_SignUpForm> {
+  final _nameCtrl = TextEditingController();
+  final _identifierCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  final _confirmCtrl = TextEditingController();
   bool _usePhone = false;
+  bool _loading = false;
+  String? _nameError;
+  String? _identifierError;
+  String? _passwordError;
+  String? _confirmError;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _identifierCtrl.dispose();
+    _passwordCtrl.dispose();
+    _confirmCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    FocusScope.of(context).unfocus();
+    final name = _nameCtrl.text.trim();
+    final identifier = _identifierCtrl.text.trim();
+    final password = _passwordCtrl.text;
+    final confirm = _confirmCtrl.text;
+    setState(() {
+      _nameError = name.isEmpty ? 'Enter your full name' : null;
+      _identifierError = identifier.isEmpty
+          ? (_usePhone ? 'Enter your phone number' : 'Enter your email')
+          : null;
+      _passwordError = password.length < 6
+          ? 'Password must be at least 6 characters'
+          : null;
+      _confirmError = confirm != password ? 'Passwords do not match' : null;
+    });
+    if (_nameError != null ||
+        _identifierError != null ||
+        _passwordError != null ||
+        _confirmError != null) {
+      return;
+    }
+    setState(() => _loading = true);
+    await widget.onSignUp();
+    if (mounted) {
+      setState(() => _loading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1224,10 +1395,13 @@ class _SignUpFormState extends State<_SignUpForm> {
           ),
         ),
         const SizedBox(height: 18),
-        const _InputField(hint: 'Full name'),
+        _InputField(
+          hint: 'Full name',
+          controller: _nameCtrl,
+          errorText: _nameError,
+          onChanged: (_) => setState(() => _nameError = null),
+        ),
         const SizedBox(height: 10),
-
-        // Email / Phone toggle pill
         Container(
           decoration: BoxDecoration(
             color: const Color(0xFFF5F5F5),
@@ -1238,7 +1412,11 @@ class _SignUpFormState extends State<_SignUpForm> {
             children: [
               Expanded(
                 child: GestureDetector(
-                  onTap: () => setState(() => _usePhone = false),
+                  onTap: () => setState(() {
+                    _usePhone = false;
+                    _identifierCtrl.clear();
+                    _identifierError = null;
+                  }),
                   child: Container(
                     height: 32,
                     decoration: BoxDecoration(
@@ -1262,7 +1440,11 @@ class _SignUpFormState extends State<_SignUpForm> {
               ),
               Expanded(
                 child: GestureDetector(
-                  onTap: () => setState(() => _usePhone = true),
+                  onTap: () => setState(() {
+                    _usePhone = true;
+                    _identifierCtrl.clear();
+                    _identifierError = null;
+                  }),
                   child: Container(
                     height: 32,
                     decoration: BoxDecoration(
@@ -1286,33 +1468,47 @@ class _SignUpFormState extends State<_SignUpForm> {
           ),
         ),
         const SizedBox(height: 10),
-
         _InputField(
           hint: _usePhone
               ? 'Phone number (e.g. +256 7xx xxx xxx)'
               : 'Email address',
+          controller: _identifierCtrl,
           keyboardType: _usePhone
               ? TextInputType.phone
               : TextInputType.emailAddress,
+          errorText: _identifierError,
+          onChanged: (_) => setState(() => _identifierError = null),
         ),
         const SizedBox(height: 10),
-        const _InputField(hint: 'Password', obscure: true),
+        _InputField(
+          hint: 'Password',
+          controller: _passwordCtrl,
+          obscure: true,
+          errorText: _passwordError,
+          onChanged: (_) => setState(() => _passwordError = null),
+        ),
         const SizedBox(height: 10),
-        const _InputField(hint: 'Confirm password', obscure: true),
+        _InputField(
+          hint: 'Confirm password',
+          controller: _confirmCtrl,
+          obscure: true,
+          errorText: _confirmError,
+          onChanged: (_) => setState(() => _confirmError = null),
+        ),
         const SizedBox(height: 16),
         SizedBox(
           height: 46,
           child: ElevatedButton(
-            onPressed: widget.onSignUp,
-            child: const Text('Create Account'),
+            onPressed: _loading ? null : _submit,
+            child: _loading
+                ? const _ButtonSpinner()
+                : const Text('Create Account'),
           ),
         ),
       ],
     );
   }
 }
-
-// ─── FORGOT PASSWORD SCREEN ───────────────────────────────────────────────────
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -1322,7 +1518,34 @@ class ForgotPasswordScreen extends StatefulWidget {
 }
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
+  final _identifierCtrl = TextEditingController();
   bool _sent = false;
+  bool _loading = false;
+  String? _identifierError;
+
+  @override
+  void dispose() {
+    _identifierCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sendResetLink() async {
+    FocusScope.of(context).unfocus();
+    final identifier = _identifierCtrl.text.trim();
+    setState(() {
+      _identifierError = identifier.isEmpty
+          ? 'Enter your email or phone number'
+          : null;
+    });
+    if (_identifierError != null) return;
+    setState(() => _loading = true);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _sent = true;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1371,14 +1594,19 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           ),
         ),
         const SizedBox(height: 28),
-        const _InputField(hint: 'Email or phone number'),
+        _InputField(
+          hint: 'Email or phone number',
+          controller: _identifierCtrl,
+          keyboardType: TextInputType.emailAddress,
+          errorText: _identifierError,
+          onChanged: (_) => setState(() => _identifierError = null),
+        ),
         const SizedBox(height: 16),
         ElevatedButton(
-          onPressed: () {
-            // TODO: call ApiService.forgotPassword()
-            setState(() => _sent = true);
-          },
-          child: const Text('Send Reset Link'),
+          onPressed: _loading ? null : _sendResetLink,
+          child: _loading
+              ? const _ButtonSpinner()
+              : const Text('Send Reset Link'),
         ),
       ],
     );
@@ -1418,8 +1646,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     );
   }
 }
-
-// ─── SOCIAL BUTTON ────────────────────────────────────────────────────────────
 
 class _SocialButton extends StatelessWidget {
   const _SocialButton({
@@ -1477,157 +1703,15 @@ class _SocialButton extends StatelessWidget {
   }
 }
 
-// ─── CUSTOM ICONS (no external packages) ─────────────────────────────────────
+class _AssetLogo extends StatelessWidget {
+  const _AssetLogo({required this.path});
+  final String path;
 
-class _GoogleIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 18,
-      height: 18,
-      child: CustomPaint(painter: _GooglePainter()),
-    );
+    return Image.asset(path, width: 18, height: 18, fit: BoxFit.contain);
   }
 }
-
-class _GooglePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height / 2;
-    final r = size.width / 2;
-
-    canvas.drawArc(
-      Rect.fromCircle(center: Offset(cx, cy), radius: r),
-      -1.57,
-      1.57,
-      false,
-      Paint()
-        ..color = const Color(0xFF4285F4)
-        ..strokeWidth = size.width * 0.22
-        ..style = PaintingStyle.stroke,
-    );
-    canvas.drawArc(
-      Rect.fromCircle(center: Offset(cx, cy), radius: r),
-      3.14,
-      0.79,
-      false,
-      Paint()
-        ..color = const Color(0xFFEA4335)
-        ..strokeWidth = size.width * 0.22
-        ..style = PaintingStyle.stroke,
-    );
-    canvas.drawArc(
-      Rect.fromCircle(center: Offset(cx, cy), radius: r),
-      3.93,
-      0.79,
-      false,
-      Paint()
-        ..color = const Color(0xFFFBBC04)
-        ..strokeWidth = size.width * 0.22
-        ..style = PaintingStyle.stroke,
-    );
-    canvas.drawArc(
-      Rect.fromCircle(center: Offset(cx, cy), radius: r),
-      4.71,
-      0.79,
-      false,
-      Paint()
-        ..color = const Color(0xFF34A853)
-        ..strokeWidth = size.width * 0.22
-        ..style = PaintingStyle.stroke,
-    );
-    canvas.drawRect(
-      Rect.fromLTRB(
-        cx,
-        cy - size.height * 0.12,
-        cx + r + 1,
-        cy + size.height * 0.12,
-      ),
-      Paint()..color = Colors.white,
-    );
-    canvas.drawCircle(
-      Offset(cx + r * 0.55, cy),
-      size.width * 0.11,
-      Paint()..color = const Color(0xFF4285F4),
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _TikTokIcon extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 18,
-      height: 18,
-      child: CustomPaint(painter: _TikTokPainter()),
-    );
-  }
-}
-
-class _TikTokPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-    _drawNote(canvas, w, h, const Color(0xFF69C9D0), Offset(w * 0.08, 0));
-    _drawNote(
-      canvas,
-      w,
-      h,
-      const Color(0xFFEE1D52),
-      Offset(-w * 0.08, h * 0.06),
-    );
-    _drawNote(canvas, w, h, Colors.white, Offset.zero);
-  }
-
-  void _drawNote(
-    Canvas canvas,
-    double w,
-    double h,
-    Color color,
-    Offset offset,
-  ) {
-    final paint = Paint()..color = color;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          w * 0.28 + offset.dx,
-          h * 0.04 + offset.dy,
-          w * 0.20,
-          h * 0.72,
-        ),
-        Radius.circular(w * 0.06),
-      ),
-      paint,
-    );
-    canvas.drawCircle(
-      Offset(w * 0.25 + offset.dx, h * 0.76 + offset.dy),
-      w * 0.19,
-      paint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          w * 0.44 + offset.dx,
-          h * 0.04 + offset.dy,
-          w * 0.50,
-          h * 0.30,
-        ),
-        Radius.circular(w * 0.10),
-      ),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-// ─── INPUT FIELD ─────────────────────────────────────────────────────────────
 
 class _InputField extends StatelessWidget {
   const _InputField({
@@ -1639,6 +1723,7 @@ class _InputField extends StatelessWidget {
     this.prefixIcon,
     this.suffixIcon,
     this.maxLines = 1,
+    this.errorText,
   });
   final String hint;
   final bool obscure;
@@ -1648,6 +1733,7 @@ class _InputField extends StatelessWidget {
   final Widget? prefixIcon;
   final Widget? suffixIcon;
   final int maxLines;
+  final String? errorText;
 
   @override
   Widget build(BuildContext context) {
@@ -1668,6 +1754,7 @@ class _InputField extends StatelessWidget {
         fillColor: const Color(0xFFFAF8F5),
         prefixIcon: prefixIcon,
         suffixIcon: suffixIcon,
+        errorText: errorText,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 14,
           vertical: 12,
@@ -1684,12 +1771,34 @@ class _InputField extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
           borderSide: const BorderSide(color: AppColors.sage, width: 1.5),
         ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: AppColors.coral, width: 1.2),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: AppColors.coral, width: 1.5),
+        ),
       ),
     );
   }
 }
 
-// ─── SHELL ───────────────────────────────────────────────────────────────────
+class _ButtonSpinner extends StatelessWidget {
+  const _ButtonSpinner();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: 18,
+      height: 18,
+      child: CircularProgressIndicator(
+        strokeWidth: 2,
+        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+      ),
+    );
+  }
+}
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -1722,7 +1831,6 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ),
         actions: [
-          // Notification bell — always visible
           _NotificationBell(),
           if (tabIndex == 1)
             Stack(
@@ -1784,13 +1892,10 @@ class _HomeShellState extends State<HomeShell> {
   }
 }
 
-// ─── NOTIFICATION BELL ────────────────────────────────────────────────────────
-
 class _NotificationBell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    // TODO: replace count with real unread count from AppState/ApiService
-    const int unreadCount = 2;
+    final unreadCount = AppScope.of(context).unreadNotificationCount;
     return Stack(
       alignment: Alignment.center,
       children: [
@@ -1837,8 +1942,6 @@ class _NotificationBell extends StatelessWidget {
   }
 }
 
-// ─── CART SHEET ──────────────────────────────────────────────────────────────
-
 class CartSheet extends StatefulWidget {
   const CartSheet({super.key});
 
@@ -1848,6 +1951,9 @@ class CartSheet extends StatefulWidget {
 
 class _CartSheetState extends State<CartSheet> {
   final TextEditingController _promoController = TextEditingController();
+  String? _promoError;
+  bool _applyingPromo = false;
+  bool _checkingOut = false;
 
   @override
   void dispose() {
@@ -1859,379 +1965,571 @@ class _CartSheetState extends State<CartSheet> {
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
     final cart = state.cart;
+    final isDeliveryValid = state.isDeliveryValid;
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 12),
-          Container(
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: AppColors.line,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              children: [
-                Text(
-                  'Your Order',
-                  style: TextStyle(
-                    fontSize: fs(context, 18),
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  '${cart.length} item${cart.length == 1 ? '' : 's'}',
-                  style: TextStyle(
-                    fontSize: fs(context, 12),
-                    color: AppColors.mutedText,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          if (cart.isEmpty)
-            Padding(
-              padding: const EdgeInsets.all(32),
-              child: Text(
-                'Your cart is empty',
-                style: TextStyle(
-                  fontSize: fs(context, 14),
-                  color: AppColors.mutedText,
-                ),
-              ),
-            )
-          else ...[
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 260),
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: cart.length,
-                itemBuilder: (_, i) {
-                  final item = cart[i];
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 6,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    item.name,
-                                    style: TextStyle(
-                                      fontSize: fs(context, 13),
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  Text(
-                                    MenuItem._fmt(item.price) + ' UGX',
-                                    style: TextStyle(
-                                      fontSize: fs(context, 11),
-                                      color: AppColors.mutedText,
-                                    ),
-                                  ),
-                                  if (item.note != null &&
-                                      item.note!.isNotEmpty)
-                                    Text(
-                                      '📝 ${item.note}',
-                                      style: TextStyle(
-                                        fontSize: fs(context, 10),
-                                        color: AppColors.grayText,
-                                        fontStyle: FontStyle.italic,
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                            Row(
-                              children: [
-                                _QtyBtn(
-                                  icon: Icons.remove,
-                                  onTap: () => state.removeFromCart(item),
-                                ),
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                  ),
-                                  child: Text(
-                                    '${item.qty}',
-                                    style: TextStyle(
-                                      fontSize: fs(context, 14),
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                                _QtyBtn(
-                                  icon: Icons.add,
-                                  onTap: () => state.addToCart(
-                                    MenuItem(
-                                      name: item.name,
-                                      price: item.price,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  );
-                },
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.line,
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
-
-            // Delivery Address selector
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: GestureDetector(
-                onTap: () => _pickAddress(context, state),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: AppColors.line),
-                    borderRadius: BorderRadius.circular(8),
-                    color: const Color(0xFFFAF8F5),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.location_on_outlined,
-                        size: 18,
-                        color: AppColors.sage,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          state.selectedAddress?.label ??
-                              'Add delivery address',
-                          style: TextStyle(
-                            fontSize: fs(context, 13),
-                            fontWeight: FontWeight.w600,
-                            color: state.selectedAddress != null
-                                ? AppColors.textDark
-                                : AppColors.mutedText,
-                          ),
-                        ),
-                      ),
-                      Icon(
-                        Icons.chevron_right,
-                        size: 16,
-                        color: AppColors.mutedText,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-            // Promo code row
+            const SizedBox(height: 16),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  Expanded(
-                    child: state.promoCodeApplied != null
-                        ? Container(
-                            height: 40,
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFE8F5E9),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.green.shade200),
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(
-                                  Icons.check_circle,
-                                  size: 16,
-                                  color: Colors.green,
+                  Text(
+                    'Your Order',
+                    style: TextStyle(
+                      fontSize: fs(context, 18),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '${cart.length} item${cart.length == 1 ? '' : 's'}',
+                    style: TextStyle(
+                      fontSize: fs(context, 12),
+                      color: AppColors.mutedText,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (cart.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(32),
+                child: Text(
+                  'Your cart is empty',
+                  style: TextStyle(
+                    fontSize: fs(context, 14),
+                    color: AppColors.mutedText,
+                  ),
+                ),
+              )
+            else ...[
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 220),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: cart.length,
+                  itemBuilder: (_, i) {
+                    final item = cart[i];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 6,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.name,
+                                      style: TextStyle(
+                                        fontSize: fs(context, 13),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${MenuItem._fmt(item.price)} UGX',
+                                      style: TextStyle(
+                                        fontSize: fs(context, 11),
+                                        color: AppColors.mutedText,
+                                      ),
+                                    ),
+                                    if (item.note != null &&
+                                        item.note!.isNotEmpty)
+                                      Text(
+                                        '📝 ${item.note}',
+                                        style: TextStyle(
+                                          fontSize: fs(context, 10),
+                                          color: AppColors.grayText,
+                                          fontStyle: FontStyle.italic,
+                                        ),
+                                      ),
+                                  ],
                                 ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    '${state.promoCodeApplied} applied!',
-                                    style: TextStyle(
-                                      fontSize: fs(context, 12),
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.green.shade700,
+                              ),
+                              Row(
+                                children: [
+                                  _QtyBtn(
+                                    icon: Icons.remove,
+                                    onTap: () => state.removeFromCart(item),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                    ),
+                                    child: Text(
+                                      '${item.qty}',
+                                      style: TextStyle(
+                                        fontSize: fs(context, 14),
+                                        fontWeight: FontWeight.w700,
+                                      ),
                                     ),
                                   ),
+                                  _QtyBtn(
+                                    icon: Icons.add,
+                                    onTap: () => state.addToCart(
+                                      MenuItem(
+                                        name: item.name,
+                                        price: item.price,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 8,
+                ),
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F5F5),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => state.setDeliveryType('Delivery'),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            decoration: BoxDecoration(
+                              color: state.deliveryType == 'Delivery'
+                                  ? AppColors.sage
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.delivery_dining_outlined,
+                                  size: 18,
+                                  color: state.deliveryType == 'Delivery'
+                                      ? Colors.white
+                                      : AppColors.mutedText,
                                 ),
-                                GestureDetector(
-                                  onTap: () => state.removePromo(),
-                                  child: Icon(
-                                    Icons.close,
-                                    size: 14,
-                                    color: Colors.green.shade700,
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Delivery',
+                                  style: TextStyle(
+                                    fontSize: fs(context, 12),
+                                    fontWeight: FontWeight.w700,
+                                    color: state.deliveryType == 'Delivery'
+                                        ? Colors.white
+                                        : AppColors.mutedText,
                                   ),
                                 ),
                               ],
                             ),
-                          )
-                        : _InputField(
-                            hint: 'Promo code',
-                            controller: _promoController,
-                            prefixIcon: Icon(
-                              Icons.local_offer_outlined,
-                              size: 16,
-                              color: AppColors.mutedText,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => state.setDeliveryType('Takeaway'),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            decoration: BoxDecoration(
+                              color: state.deliveryType == 'Takeaway'
+                                  ? AppColors.sage
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.shopping_bag_outlined,
+                                  size: 18,
+                                  color: state.deliveryType == 'Takeaway'
+                                      ? Colors.white
+                                      : AppColors.mutedText,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Takeaway',
+                                  style: TextStyle(
+                                    fontSize: fs(context, 12),
+                                    fontWeight: FontWeight.w700,
+                                    color: state.deliveryType == 'Takeaway'
+                                        ? Colors.white
+                                        : AppColors.mutedText,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                  ),
-                  if (state.promoCodeApplied == null) ...[
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      height: 40,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          minimumSize: Size.zero,
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        onPressed: () {
-                          final code = _promoController.text;
-                          if (!state.applyPromo(code)) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Invalid promo code'),
-                              ),
-                            );
-                          }
-                        },
-                        child: Text(
-                          'Apply',
-                          style: TextStyle(fontSize: fs(context, 12)),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-
-            const Divider(color: AppColors.line),
-
-            // Order summary
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        'Subtotal',
-                        style: TextStyle(
-                          fontSize: fs(context, 13),
-                          color: AppColors.mutedText,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        'UGX ${MenuItem._fmt(state.cartSubtotal)}',
-                        style: TextStyle(
-                          fontSize: fs(context, 13),
-                          color: AppColors.mutedText,
                         ),
                       ),
                     ],
                   ),
-                  if (state.promoDiscountAmount > 0) ...[
-                    const SizedBox(height: 4),
+                ),
+              ),
+              if (state.deliveryType == 'Delivery')
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 4,
+                  ),
+                  child: GestureDetector(
+                    onTap: () => _pickAddress(context, state),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: AppColors.line),
+                        borderRadius: BorderRadius.circular(8),
+                        color: const Color(0xFFFAF8F5),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.location_on_outlined,
+                            size: 18,
+                            color: AppColors.sage,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              state.selectedAddress?.label ??
+                                  'Add delivery address',
+                              style: TextStyle(
+                                fontSize: fs(context, 13),
+                                fontWeight: FontWeight.w600,
+                                color: state.selectedAddress != null
+                                    ? AppColors.textDark
+                                    : AppColors.mutedText,
+                              ),
+                            ),
+                          ),
+                          Icon(
+                            Icons.chevron_right,
+                            size: 16,
+                            color: AppColors.mutedText,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              if (state.deliveryType == 'Delivery' && !isDeliveryValid)
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 4,
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.coral.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          size: 16,
+                          color: AppColors.coral,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Minimum order of UGX 10,000 for delivery',
+                            style: TextStyle(
+                              fontSize: fs(context, 11),
+                              color: AppColors.coral,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 4,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: state.promoCodeApplied != null
+                          ? Container(
+                              height: 40,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE8F5E9),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: Colors.green.shade200,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.check_circle,
+                                    size: 16,
+                                    color: Colors.green,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      '${state.promoCodeApplied} applied!',
+                                      style: TextStyle(
+                                        fontSize: fs(context, 12),
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.green.shade700,
+                                      ),
+                                    ),
+                                  ),
+                                  GestureDetector(
+                                    onTap: () => state.removePromo(),
+                                    child: Icon(
+                                      Icons.close,
+                                      size: 14,
+                                      color: Colors.green.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : _InputField(
+                              hint: 'Promo code',
+                              controller: _promoController,
+                              errorText: _promoError,
+                              onChanged: (_) =>
+                                  setState(() => _promoError = null),
+                              prefixIcon: Icon(
+                                Icons.local_offer_outlined,
+                                size: 16,
+                                color: AppColors.mutedText,
+                              ),
+                            ),
+                    ),
+                    if (state.promoCodeApplied == null) ...[
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        height: 40,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            minimumSize: Size.zero,
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          onPressed: _applyingPromo
+                              ? null
+                              : () => _applyPromo(context, state),
+                          child: _applyingPromo
+                              ? const _ButtonSpinner()
+                              : Text(
+                                  'Apply',
+                                  style: TextStyle(fontSize: fs(context, 12)),
+                                ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const Divider(color: AppColors.line),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 4,
+                ),
+                child: Column(
+                  children: [
                     Row(
                       children: [
                         Text(
-                          'Discount',
+                          'Subtotal',
                           style: TextStyle(
                             fontSize: fs(context, 13),
-                            color: Colors.green.shade700,
+                            color: AppColors.mutedText,
                           ),
                         ),
                         const Spacer(),
                         Text(
-                          '- UGX ${MenuItem._fmt(state.promoDiscountAmount)}',
+                          'UGX ${MenuItem._fmt(state.cartSubtotal)}',
                           style: TextStyle(
                             fontSize: fs(context, 13),
-                            color: Colors.green.shade700,
-                            fontWeight: FontWeight.w700,
+                            color: AppColors.mutedText,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (state.promoDiscountAmount > 0) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Text(
+                            'Discount',
+                            style: TextStyle(
+                              fontSize: fs(context, 13),
+                              color: Colors.green.shade700,
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            '- UGX ${MenuItem._fmt(state.promoDiscountAmount)}',
+                            style: TextStyle(
+                              fontSize: fs(context, 13),
+                              color: Colors.green.shade700,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Text(
+                          'Total',
+                          style: TextStyle(
+                            fontSize: fs(context, 15),
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          'UGX ${MenuItem._fmt(state.cartTotal)}',
+                          style: TextStyle(
+                            fontSize: fs(context, 15),
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.sage,
                           ),
                         ),
                       ],
                     ),
                   ],
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Text(
-                        'Total',
-                        style: TextStyle(
-                          fontSize: fs(context, 15),
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        'UGX ${MenuItem._fmt(state.cartTotal)}',
-                        style: TextStyle(
-                          fontSize: fs(context, 15),
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.sage,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                ),
               ),
-            ),
-
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => AppScope(
-                        state: AppScope.of(context),
-                        child: const CheckoutScreen(),
-                      ),
-                    ),
-                  );
-                },
-                child: const Text('Proceed to Checkout'),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: ElevatedButton(
+                  onPressed: _checkingOut
+                      ? null
+                      : () async {
+                          if (!state.isAuthenticated) {
+                            requestCheckoutAuth(
+                              context,
+                              state,
+                              closeCurrent: true,
+                            );
+                            return;
+                          }
+                          if (state.deliveryType == 'Delivery' &&
+                              !isDeliveryValid) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Minimum order of UGX 10,000 required for delivery',
+                                ),
+                                backgroundColor: AppColors.coral,
+                              ),
+                            );
+                            return;
+                          }
+                          if (state.deliveryType == 'Delivery' &&
+                              state.selectedAddress == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Please add a delivery address'),
+                                backgroundColor: AppColors.coral,
+                              ),
+                            );
+                            return;
+                          }
+                          setState(() => _checkingOut = true);
+                          await Future<void>.delayed(
+                            const Duration(milliseconds: 250),
+                          );
+                          if (!context.mounted) return;
+                          Navigator.pop(context);
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => AppScope(
+                                state: AppScope.of(context),
+                                child: const CheckoutScreen(),
+                              ),
+                            ),
+                          );
+                        },
+                  child: _checkingOut
+                      ? const _ButtonSpinner()
+                      : const Text('Proceed to Checkout'),
+                ),
               ),
-            ),
+            ],
           ],
-        ],
+        ),
       ),
     );
+  }
+
+  Future<void> _applyPromo(BuildContext context, AppState state) async {
+    FocusScope.of(context).unfocus();
+    final code = _promoController.text.trim();
+    setState(() {
+      _promoError = code.isEmpty ? 'Enter a promo code' : null;
+    });
+    if (_promoError != null) return;
+    setState(() => _applyingPromo = true);
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!context.mounted) return;
+    setState(() => _applyingPromo = false);
+    if (!state.applyPromo(code)) {
+      setState(() => _promoError = 'Invalid promo code');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Invalid promo code')));
+    }
   }
 
   void _pickAddress(BuildContext context, AppState state) {
@@ -2266,12 +2564,9 @@ class _QtyBtn extends StatelessWidget {
   }
 }
 
-// ─── ADDRESS PICKER SHEET ────────────────────────────────────────────────────
-
 class AddressPickerSheet extends StatelessWidget {
   const AddressPickerSheet({super.key});
 
-  // TODO: load real saved addresses from ApiService.getAddresses()
   static final List<DeliveryAddress> _sampleAddresses = [
     DeliveryAddress(
       label: 'Home',
@@ -2395,8 +2690,6 @@ class AddressPickerSheet extends StatelessWidget {
   }
 }
 
-// ─── ADD ADDRESS SCREEN ──────────────────────────────────────────────────────
-
 class AddAddressScreen extends StatefulWidget {
   const AddAddressScreen({super.key});
 
@@ -2405,12 +2698,44 @@ class AddAddressScreen extends StatefulWidget {
 }
 
 class _AddAddressScreenState extends State<AddAddressScreen> {
-  final _labelCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
   final _instructionsCtrl = TextEditingController();
   String _selectedLabel = 'Home';
+  String? _addressError;
+  bool _saving = false;
 
   final List<String> _quickLabels = ['Home', 'Work', 'Hotel', 'Other'];
+
+  @override
+  void dispose() {
+    _addressCtrl.dispose();
+    _instructionsCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveAddress() async {
+    FocusScope.of(context).unfocus();
+    final address = _addressCtrl.text.trim();
+    setState(() {
+      _addressError = address.isEmpty ? 'Enter a delivery address' : null;
+    });
+    if (_addressError != null) return;
+    setState(() => _saving = true);
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!mounted) return;
+    final addr = DeliveryAddress(
+      label: _selectedLabel,
+      fullAddress: address,
+      instructions: _instructionsCtrl.text.trim().isEmpty
+          ? null
+          : _instructionsCtrl.text.trim(),
+    );
+    AppScope.of(context).setAddress(addr);
+    Navigator.of(context).pop();
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Address saved!')));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2490,6 +2815,8 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
             hint: 'e.g. Plot 14, Bukoto Street, Kampala',
             controller: _addressCtrl,
             maxLines: 2,
+            errorText: _addressError,
+            onChanged: (_) => setState(() => _addressError = null),
           ),
           const SizedBox(height: 16),
           Text(
@@ -2507,32 +2834,16 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
           ),
           const SizedBox(height: 24),
           ElevatedButton(
-            onPressed: () {
-              // TODO: call ApiService.saveAddress()
-              final addr = DeliveryAddress(
-                label: _selectedLabel,
-                fullAddress: _addressCtrl.text.isEmpty
-                    ? 'Not specified'
-                    : _addressCtrl.text,
-                instructions: _instructionsCtrl.text.isEmpty
-                    ? null
-                    : _instructionsCtrl.text,
-              );
-              AppScope.of(context).setAddress(addr);
-              Navigator.of(context).pop();
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('Address saved!')));
-            },
-            child: const Text('Save Address'),
+            onPressed: _saving ? null : _saveAddress,
+            child: _saving
+                ? const _ButtonSpinner()
+                : const Text('Save Address'),
           ),
         ],
       ),
     );
   }
 }
-
-// ─── CHECKOUT SCREEN ─────────────────────────────────────────────────────────
 
 class CheckoutScreen extends StatefulWidget {
   const CheckoutScreen({super.key});
@@ -2543,6 +2854,7 @@ class CheckoutScreen extends StatefulWidget {
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
   String _selectedPayment = 'Mobile Money';
+  bool _placingOrder = false;
   final List<String> _paymentMethods = [
     'Mobile Money',
     'Cash on Delivery',
@@ -2552,6 +2864,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final isDeliveryValid = state.isDeliveryValid;
 
     return Scaffold(
       appBar: AppBar(
@@ -2568,79 +2881,166 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
         children: [
-          // Delivery Address
-          _SectionHeader(title: 'Delivery Address'),
-          GestureDetector(
-            onTap: () => showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              backgroundColor: Colors.transparent,
-              builder: (_) =>
-                  AppScope(state: state, child: const AddressPickerSheet()),
+          _SectionHeader(title: 'Delivery Type'),
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF5F5F5),
+              borderRadius: BorderRadius.circular(12),
             ),
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.line),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.location_on_outlined,
-                    size: 20,
-                    color: AppColors.sage,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: state.selectedAddress == null
-                        ? Text(
-                            'Tap to add address',
-                            style: TextStyle(
-                              fontSize: fs(context, 13),
-                              color: AppColors.mutedText,
-                            ),
-                          )
-                        : Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                state.selectedAddress!.label,
-                                style: TextStyle(
-                                  fontSize: fs(context, 13),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              Text(
-                                state.selectedAddress!.fullAddress,
-                                style: TextStyle(
-                                  fontSize: fs(context, 12),
-                                  color: AppColors.mutedText,
-                                ),
-                              ),
-                              if (state.selectedAddress!.instructions != null)
-                                Text(
-                                  '📝 ${state.selectedAddress!.instructions}',
-                                  style: TextStyle(
-                                    fontSize: fs(context, 11),
-                                    color: AppColors.grayText,
-                                  ),
-                                ),
-                            ],
+            child: Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => state.setDeliveryType('Delivery'),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: state.deliveryType == 'Delivery'
+                            ? AppColors.sage
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.delivery_dining_outlined,
+                            size: 18,
+                            color: state.deliveryType == 'Delivery'
+                                ? Colors.white
+                                : AppColors.mutedText,
                           ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Delivery',
+                            style: TextStyle(
+                              fontSize: fs(context, 12),
+                              fontWeight: FontWeight.w700,
+                              color: state.deliveryType == 'Delivery'
+                                  ? Colors.white
+                                  : AppColors.mutedText,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                  Icon(
-                    Icons.edit_outlined,
-                    size: 16,
-                    color: AppColors.mutedText,
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => state.setDeliveryType('Takeaway'),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      decoration: BoxDecoration(
+                        color: state.deliveryType == 'Takeaway'
+                            ? AppColors.sage
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.shopping_bag_outlined,
+                            size: 18,
+                            color: state.deliveryType == 'Takeaway'
+                                ? Colors.white
+                                : AppColors.mutedText,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Takeaway',
+                            style: TextStyle(
+                              fontSize: fs(context, 12),
+                              fontWeight: FontWeight.w700,
+                              color: state.deliveryType == 'Takeaway'
+                                  ? Colors.white
+                                  : AppColors.mutedText,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
-
           const SizedBox(height: 20),
+          if (state.deliveryType == 'Delivery') ...[
+            _SectionHeader(title: 'Delivery Address'),
+            GestureDetector(
+              onTap: () => showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: Colors.transparent,
+                builder: (_) =>
+                    AppScope(state: state, child: const AddressPickerSheet()),
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.line),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.location_on_outlined,
+                      size: 20,
+                      color: AppColors.sage,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: state.selectedAddress == null
+                          ? Text(
+                              'Tap to add address',
+                              style: TextStyle(
+                                fontSize: fs(context, 13),
+                                color: AppColors.mutedText,
+                              ),
+                            )
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  state.selectedAddress!.label,
+                                  style: TextStyle(
+                                    fontSize: fs(context, 13),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                Text(
+                                  state.selectedAddress!.fullAddress,
+                                  style: TextStyle(
+                                    fontSize: fs(context, 12),
+                                    color: AppColors.mutedText,
+                                  ),
+                                ),
+                                if (state.selectedAddress!.instructions != null)
+                                  Text(
+                                    '📝 ${state.selectedAddress!.instructions}',
+                                    style: TextStyle(
+                                      fontSize: fs(context, 11),
+                                      color: AppColors.grayText,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                    ),
+                    Icon(
+                      Icons.edit_outlined,
+                      size: 16,
+                      color: AppColors.mutedText,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
           _SectionHeader(title: 'Order Summary'),
           Container(
             decoration: BoxDecoration(
@@ -2738,7 +3138,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               ],
             ),
           ),
-
           const SizedBox(height: 20),
           _SectionHeader(title: 'Payment Method'),
           Container(
@@ -2818,10 +3217,38 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         color: Colors.white,
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
         child: ElevatedButton(
-          onPressed: state.cart.isEmpty
+          onPressed: state.cart.isEmpty || _placingOrder
               ? null
-              : () {
-                  state.placeOrder(); // TODO: wire to ApiService.placeOrder()
+              : () async {
+                  if (!state.isAuthenticated) {
+                    requestCheckoutAuth(context, state);
+                    return;
+                  }
+                  if (state.deliveryType == 'Delivery' && !isDeliveryValid) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Minimum order of UGX 10,000 required for delivery',
+                        ),
+                        backgroundColor: AppColors.coral,
+                      ),
+                    );
+                    return;
+                  }
+                  if (state.deliveryType == 'Delivery' &&
+                      state.selectedAddress == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Please add a delivery address'),
+                        backgroundColor: AppColors.coral,
+                      ),
+                    );
+                    return;
+                  }
+                  setState(() => _placingOrder = true);
+                  await Future<void>.delayed(const Duration(milliseconds: 300));
+                  if (!context.mounted) return;
+                  state.placeOrder();
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
                       builder: (_) => AppScope(
@@ -2840,13 +3267,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               borderRadius: BorderRadius.circular(12),
             ),
           ),
-          child: Text(
-            'Place Order • UGX ${MenuItem._fmt(state.cartTotal)}',
-            style: TextStyle(
-              fontSize: fs(context, 14),
-              fontWeight: FontWeight.w800,
-            ),
-          ),
+          child: _placingOrder
+              ? const _ButtonSpinner()
+              : Text(
+                  'Place Order • UGX ${MenuItem._fmt(state.cartTotal)}',
+                  style: TextStyle(
+                    fontSize: fs(context, 14),
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
         ),
       ),
     );
@@ -2873,8 +3302,6 @@ class _SectionHeader extends StatelessWidget {
     );
   }
 }
-
-// ─── ORDER CONFIRMATION SCREEN ────────────────────────────────────────────────
 
 class OrderConfirmationScreen extends StatelessWidget {
   const OrderConfirmationScreen({super.key, required this.orderId});
@@ -3005,8 +3432,6 @@ extension _LetExt<T> on T {
   R let<R>(R Function(T it) block) => block(this);
 }
 
-// ─── ORDER TRACKING SCREEN ───────────────────────────────────────────────────
-
 class OrderTrackingScreen extends StatelessWidget {
   const OrderTrackingScreen({super.key, required this.orderId});
   final String orderId;
@@ -3016,7 +3441,6 @@ class OrderTrackingScreen extends StatelessWidget {
     final state = AppScope.of(context);
     final order = state.orders.where((o) => o.id == orderId).firstOrNull;
 
-    // TODO: use GET /api/orders/{id}/track for real-time status updates (polling or WebSocket)
     final steps = [
       _TrackStep(
         label: 'Order Placed',
@@ -3062,7 +3486,6 @@ class OrderTrackingScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          // Order ID card
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -3099,11 +3522,19 @@ class OrderTrackingScreen extends StatelessWidget {
                       color: AppColors.mutedText,
                     ),
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    order.deliveryType == 'Takeaway' ? 'Takeaway' : 'Delivery',
+                    style: TextStyle(
+                      fontSize: fs(context, 11),
+                      color: AppColors.sage,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ],
               ],
             ),
           ),
-
           const SizedBox(height: 24),
           Text(
             'Order Status',
@@ -3113,8 +3544,6 @@ class OrderTrackingScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-
-          // Tracking timeline
           ...steps.asMap().entries.map((entry) {
             final i = entry.key;
             final step = entry.value;
@@ -3164,7 +3593,6 @@ class OrderTrackingScreen extends StatelessWidget {
               ],
             );
           }),
-
           const SizedBox(height: 24),
           Text(
             '⚡ Live tracking will be available once your order is confirmed.',
@@ -3191,15 +3619,12 @@ class _TrackStep {
   final bool done;
 }
 
-// ─── ORDER HISTORY SCREEN ────────────────────────────────────────────────────
-
 class OrderHistoryScreen extends StatelessWidget {
   const OrderHistoryScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     final orders = AppScope.of(context).orders;
-    // TODO: load from ApiService.getOrderHistory() and populate orders
 
     return Scaffold(
       appBar: AppBar(
@@ -3246,14 +3671,14 @@ class OrderHistoryScreen extends StatelessWidget {
           : ListView.separated(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
               itemCount: orders.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (_, i) {
+              separatorBuilder: (context, index) => const SizedBox(height: 12),
+              itemBuilder: (itemContext, i) {
                 final order = orders[i];
                 return GestureDetector(
-                  onTap: () => Navigator.of(context).push(
+                  onTap: () => Navigator.of(itemContext).push(
                     MaterialPageRoute(
                       builder: (_) => AppScope(
-                        state: AppScope.of(context),
+                        state: AppScope.of(itemContext),
                         child: OrderTrackingScreen(orderId: order.id),
                       ),
                     ),
@@ -3302,6 +3727,17 @@ class OrderHistoryScreen extends StatelessWidget {
                             color: AppColors.mutedText,
                           ),
                         ),
+                        const SizedBox(height: 4),
+                        Text(
+                          order.deliveryType == 'Takeaway'
+                              ? 'Takeaway'
+                              : 'Delivery',
+                          style: TextStyle(
+                            fontSize: fs(context, 10),
+                            color: AppColors.sage,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                         const SizedBox(height: 6),
                         Text(
                           '${order.items.length} item${order.items.length == 1 ? '' : 's'} • UGX ${MenuItem._fmt(order.total)}',
@@ -3315,10 +3751,10 @@ class OrderHistoryScreen extends StatelessWidget {
                           children: [
                             Expanded(
                               child: OutlinedButton(
-                                onPressed: () => Navigator.of(context).push(
+                                onPressed: () => Navigator.of(itemContext).push(
                                   MaterialPageRoute(
                                     builder: (_) => AppScope(
-                                      state: AppScope.of(context),
+                                      state: AppScope.of(itemContext),
                                       child: OrderTrackingScreen(
                                         orderId: order.id,
                                       ),
@@ -3349,15 +3785,18 @@ class OrderHistoryScreen extends StatelessWidget {
                             Expanded(
                               child: ElevatedButton(
                                 onPressed: () {
+                                  final state = AppScope.of(itemContext);
                                   for (final item in order.items) {
-                                    AppScope.of(context).addToCart(
+                                    state.addToCart(
                                       MenuItem(
                                         name: item.name,
                                         price: item.price,
                                       ),
                                     );
                                   }
-                                  ScaffoldMessenger.of(context).showSnackBar(
+                                  ScaffoldMessenger.of(
+                                    itemContext,
+                                  ).showSnackBar(
                                     const SnackBar(
                                       content: Text('Items added to cart!'),
                                     ),
@@ -3393,38 +3832,13 @@ class OrderHistoryScreen extends StatelessWidget {
   }
 }
 
-// ─── NOTIFICATIONS SCREEN ────────────────────────────────────────────────────
-
 class NotificationsScreen extends StatelessWidget {
   const NotificationsScreen({super.key});
 
-  // TODO: load from ApiService.getNotifications()
-  static const List<_NotifItem> _items = [
-    _NotifItem(
-      icon: Icons.local_offer_outlined,
-      title: 'Special Offer! 🎉',
-      body: 'Get 20% off your next order with code WELCOME20',
-      time: '2 min ago',
-      unread: true,
-    ),
-    _NotifItem(
-      icon: Icons.delivery_dining_outlined,
-      title: 'Order on the way',
-      body: 'Your order ORD-123 is out for delivery!',
-      time: '1 hr ago',
-      unread: true,
-    ),
-    _NotifItem(
-      icon: Icons.workspace_premium_outlined,
-      title: 'You earned 50 points!',
-      body: 'Keep ordering to unlock your next reward.',
-      time: 'Yesterday',
-      unread: false,
-    ),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final state = AppScope.of(context);
+    final items = state.notifications;
     return Scaffold(
       appBar: AppBar(
         title: const Text('NOTIFICATIONS'),
@@ -3438,7 +3852,9 @@ class NotificationsScreen extends StatelessWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () {}, // TODO: mark all read via ApiService
+            onPressed: state.unreadNotificationCount == 0
+                ? null
+                : state.markAllNotificationsRead,
             child: const Text(
               'Mark all read',
               style: TextStyle(color: Colors.white70, fontSize: 12),
@@ -3446,7 +3862,7 @@ class NotificationsScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: _items.isEmpty
+      body: items.isEmpty
           ? Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -3469,11 +3885,11 @@ class NotificationsScreen extends StatelessWidget {
             )
           : ListView.separated(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: _items.length,
-              separatorBuilder: (_, __) =>
+              itemCount: items.length,
+              separatorBuilder: (context, index) =>
                   const Divider(color: AppColors.line, height: 1),
               itemBuilder: (_, i) {
-                final notif = _items[i];
+                final notif = items[i];
                 return Container(
                   color: notif.unread
                       ? AppColors.sage.withValues(alpha: 0.04)
@@ -3547,8 +3963,8 @@ class NotificationsScreen extends StatelessWidget {
   }
 }
 
-class _NotifItem {
-  const _NotifItem({
+class AppNotification {
+  const AppNotification({
     required this.icon,
     required this.title,
     required this.body,
@@ -3558,9 +3974,17 @@ class _NotifItem {
   final IconData icon;
   final String title, body, time;
   final bool unread;
-}
 
-// ─── SEARCH SCREEN ───────────────────────────────────────────────────────────
+  AppNotification copyWith({bool? unread}) {
+    return AppNotification(
+      icon: icon,
+      title: title,
+      body: body,
+      time: time,
+      unread: unread ?? this.unread,
+    );
+  }
+}
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -3575,7 +3999,6 @@ class _SearchScreenState extends State<SearchScreen> {
   bool _searched = false;
 
   void _search(String query) {
-    // TODO: replace with ApiService.searchMenu(query: query) for backend search
     final q = query.toLowerCase().trim();
     if (q.isEmpty) {
       setState(() {
@@ -3682,7 +4105,8 @@ class _SearchScreenState extends State<SearchScreen> {
               child: ListView.separated(
                 padding: const EdgeInsets.all(16),
                 itemCount: _results.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                separatorBuilder: (context, index) =>
+                    const SizedBox(height: 12),
                 itemBuilder: (_, i) => _SearchResultTile(item: _results[i]),
               ),
             ),
@@ -3778,8 +4202,6 @@ class _SearchResultTile extends StatelessWidget {
   }
 }
 
-// ─── FAVOURITES SCREEN ───────────────────────────────────────────────────────
-
 class FavouritesScreen extends StatelessWidget {
   const FavouritesScreen({super.key});
 
@@ -3789,7 +4211,6 @@ class FavouritesScreen extends StatelessWidget {
     final favItems = allMenuItems
         .where((item) => state.isFavorite(item.name))
         .toList();
-    // TODO: merge with ApiService.getFavorites() once backend is ready
 
     return Scaffold(
       appBar: AppBar(
@@ -3844,12 +4265,9 @@ class FavouritesScreen extends StatelessWidget {
   }
 }
 
-// ─── DEALS SCREEN ────────────────────────────────────────────────────────────
-
 class DealsScreen extends StatelessWidget {
   const DealsScreen({super.key});
 
-  // TODO: load from ApiService.getDeals() / promo endpoint
   static const List<_Deal> _deals = [
     _Deal(
       title: '10% Off Your Order',
@@ -3898,7 +4316,7 @@ class DealsScreen extends StatelessWidget {
       body: ListView.separated(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
         itemCount: _deals.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 14),
+        separatorBuilder: (context, index) => const SizedBox(height: 14),
         itemBuilder: (_, i) {
           final deal = _deals[i];
           return Container(
@@ -3967,6 +4385,7 @@ class DealsScreen extends StatelessWidget {
                       const SizedBox(width: 10),
                       GestureDetector(
                         onTap: () {
+                          Clipboard.setData(ClipboardData(text: deal.code!));
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text('Code ${deal.code} copied!'),
@@ -4018,8 +4437,6 @@ class _Deal {
   final Color accentColor;
   final String expiry;
 }
-
-// ─── E-GIFT CARD SCREEN ──────────────────────────────────────────────────────
 
 class EGiftCardScreen extends StatefulWidget {
   const EGiftCardScreen({super.key});
@@ -4076,168 +4493,252 @@ class _EGiftCardScreenState extends State<EGiftCardScreen>
               ],
             ),
           ),
-          Expanded(child: _tabs.index == 0 ? _SendGiftTab() : _RedeemGiftTab()),
+          Expanded(
+            child: _tabs.index == 0
+                ? const _SendGiftTab()
+                : const _RedeemGiftTab(),
+          ),
         ],
       ),
     );
   }
 }
 
-class _SendGiftTab extends StatelessWidget {
-  static const List<int> _amounts = [10000, 20000, 50000, 100000];
-  int _selected = 20000;
+class _SendGiftTab extends StatefulWidget {
+  const _SendGiftTab();
 
-  _SendGiftTab({super.key});
+  @override
+  State<_SendGiftTab> createState() => _SendGiftTabState();
+}
+
+class _SendGiftTabState extends State<_SendGiftTab> {
+  static const List<int> _amounts = [10000, 20000, 50000, 100000];
+  final _recipientNameCtrl = TextEditingController();
+  final _recipientPhoneCtrl = TextEditingController();
+  final _messageCtrl = TextEditingController();
+  int _selected = 20000;
+  bool _sending = false;
+  String? _recipientNameError;
+  String? _recipientPhoneError;
+
+  @override
+  void dispose() {
+    _recipientNameCtrl.dispose();
+    _recipientPhoneCtrl.dispose();
+    _messageCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sendGiftCard() async {
+    FocusScope.of(context).unfocus();
+    final name = _recipientNameCtrl.text.trim();
+    final phone = _recipientPhoneCtrl.text.trim();
+    setState(() {
+      _recipientNameError = name.isEmpty ? "Enter recipient's name" : null;
+      _recipientPhoneError = phone.isEmpty ? "Enter recipient's phone" : null;
+    });
+    if (_recipientNameError != null || _recipientPhoneError != null) return;
+    setState(() => _sending = true);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    setState(() => _sending = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Gift card sent successfully!'),
+        backgroundColor: AppColors.sage,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    return StatefulBuilder(
-      builder: (context, setState) => ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          Container(
-            height: 140,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [AppColors.sage, AppColors.navy],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Container(
+          height: 140,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [AppColors.sage, AppColors.navy],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Stack(
+            children: [
+              Positioned(
+                right: -20,
+                top: -20,
+                child: Container(
+                  width: 120,
+                  height: 120,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.07),
+                    shape: BoxShape.circle,
+                  ),
+                ),
               ),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Stack(
-              children: [
-                Positioned(
-                  right: -20,
-                  top: -20,
-                  child: Container(
-                    width: 120,
-                    height: 120,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.07),
-                      shape: BoxShape.circle,
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Oweitu Cafe',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: fs(context, 16),
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Oweitu Cafe',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: fs(context, 16),
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'E-Gift Card',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: fs(context, 11),
-                              fontWeight: FontWeight.w500,
-                            ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'E-Gift Card',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: fs(context, 11),
+                            fontWeight: FontWeight.w500,
                           ),
-                          Text(
-                            'UGX ${MenuItem._fmt(_selected)}',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: fs(context, 22),
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-          Text(
-            'Select Amount',
-            style: TextStyle(
-              fontSize: fs(context, 13),
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: _amounts
-                .map(
-                  (amt) => Expanded(
-                    child: GestureDetector(
-                      onTap: () => setState(() => _selected = amt),
-                      child: Container(
-                        margin: EdgeInsets.only(
-                          right: amt != _amounts.last ? 8 : 0,
                         ),
-                        height: 40,
-                        decoration: BoxDecoration(
+                        Text(
+                          'UGX ${MenuItem._fmt(_selected)}',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: fs(context, 22),
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+        Text(
+          'Select Amount',
+          style: TextStyle(
+            fontSize: fs(context, 13),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: _amounts
+              .map(
+                (amt) => Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _selected = amt),
+                    child: Container(
+                      margin: EdgeInsets.only(
+                        right: amt != _amounts.last ? 8 : 0,
+                      ),
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: _selected == amt
+                            ? AppColors.sage
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
                           color: _selected == amt
                               ? AppColors.sage
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: _selected == amt
-                                ? AppColors.sage
-                                : AppColors.line,
-                          ),
+                              : AppColors.line,
                         ),
-                        child: Center(
-                          child: Text(
-                            '${(amt / 1000).toInt()}K',
-                            style: TextStyle(
-                              fontSize: fs(context, 12),
-                              fontWeight: FontWeight.w700,
-                              color: _selected == amt
-                                  ? Colors.white
-                                  : AppColors.mutedText,
-                            ),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${(amt / 1000).toInt()}K',
+                          style: TextStyle(
+                            fontSize: fs(context, 12),
+                            fontWeight: FontWeight.w700,
+                            color: _selected == amt
+                                ? Colors.white
+                                : AppColors.mutedText,
                           ),
                         ),
                       ),
                     ),
                   ),
-                )
-                .toList(),
-          ),
-          const SizedBox(height: 16),
-          const _InputField(hint: "Recipient's name"),
-          const SizedBox(height: 10),
-          const _InputField(
-            hint: "Recipient's phone number",
-            keyboardType: TextInputType.phone,
-          ),
-          const SizedBox(height: 10),
-          const _InputField(hint: 'Personal message (optional)', maxLines: 3),
-          const SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: () {
-              // TODO: call ApiService.sendGiftCard()
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Gift card sent successfully! 🎁'),
-                  backgroundColor: AppColors.sage,
                 ),
-              );
-            },
-            child: Text('Send Gift Card • UGX ${MenuItem._fmt(_selected)}'),
-          ),
-        ],
-      ),
+              )
+              .toList(),
+        ),
+        const SizedBox(height: 16),
+        _InputField(
+          hint: "Recipient's name",
+          controller: _recipientNameCtrl,
+          errorText: _recipientNameError,
+          onChanged: (_) => setState(() => _recipientNameError = null),
+        ),
+        const SizedBox(height: 10),
+        _InputField(
+          hint: "Recipient's phone number",
+          controller: _recipientPhoneCtrl,
+          keyboardType: TextInputType.phone,
+          errorText: _recipientPhoneError,
+          onChanged: (_) => setState(() => _recipientPhoneError = null),
+        ),
+        const SizedBox(height: 10),
+        _InputField(
+          hint: 'Personal message (optional)',
+          controller: _messageCtrl,
+          maxLines: 3,
+        ),
+        const SizedBox(height: 20),
+        ElevatedButton(
+          onPressed: _sending ? null : _sendGiftCard,
+          child: _sending
+              ? const _ButtonSpinner()
+              : Text('Send Gift Card • UGX ${MenuItem._fmt(_selected)}'),
+        ),
+      ],
     );
   }
 }
 
-class _RedeemGiftTab extends StatelessWidget {
+class _RedeemGiftTab extends StatefulWidget {
+  const _RedeemGiftTab();
+
+  @override
+  State<_RedeemGiftTab> createState() => _RedeemGiftTabState();
+}
+
+class _RedeemGiftTabState extends State<_RedeemGiftTab> {
+  final _codeCtrl = TextEditingController();
+  String? _codeError;
+  bool _redeeming = false;
+
+  @override
+  void dispose() {
+    _codeCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _redeem() async {
+    FocusScope.of(context).unfocus();
+    final code = _codeCtrl.text.trim();
+    setState(() {
+      _codeError = code.isEmpty ? 'Enter a gift card code' : null;
+    });
+    if (_codeError != null) return;
+    setState(() => _redeeming = true);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    setState(() => _redeeming = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Gift card redeemed! Credit added to your account.'),
+        backgroundColor: AppColors.sage,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -4267,29 +4768,22 @@ class _RedeemGiftTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 28),
-          const _InputField(hint: 'Gift card code (e.g. OWGFT-XXXX-XXXX)'),
+          _InputField(
+            hint: 'Gift card code (e.g. OWGFT-XXXX-XXXX)',
+            controller: _codeCtrl,
+            errorText: _codeError,
+            onChanged: (_) => setState(() => _codeError = null),
+          ),
           const SizedBox(height: 16),
           ElevatedButton(
-            onPressed: () {
-              // TODO: call ApiService.redeemGiftCard()
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Gift card redeemed! Credit added to your account.',
-                  ),
-                  backgroundColor: AppColors.sage,
-                ),
-              );
-            },
-            child: const Text('Redeem'),
+            onPressed: _redeeming ? null : _redeem,
+            child: _redeeming ? const _ButtonSpinner() : const Text('Redeem'),
           ),
         ],
       ),
     );
   }
 }
-
-// ─── SETTINGS SCREEN ─────────────────────────────────────────────────────────
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -4488,7 +4982,7 @@ class _SwitchRow extends StatelessWidget {
           Switch(
             value: value,
             onChanged: onChanged,
-            activeColor: AppColors.sage,
+            activeThumbColor: AppColors.sage,
           ),
         ],
       ),
@@ -4534,8 +5028,6 @@ class _NavRow extends StatelessWidget {
   }
 }
 
-// ─── CONTACT SUPPORT SCREEN ───────────────────────────────────────────────────
-
 class ContactSupportScreen extends StatefulWidget {
   const ContactSupportScreen({super.key});
 
@@ -4544,7 +5036,37 @@ class ContactSupportScreen extends StatefulWidget {
 }
 
 class _ContactSupportScreenState extends State<ContactSupportScreen> {
+  final _subjectCtrl = TextEditingController();
+  final _messageCtrl = TextEditingController();
   bool _submitted = false;
+  bool _sending = false;
+  String? _subjectError;
+  String? _messageError;
+
+  @override
+  void dispose() {
+    _subjectCtrl.dispose();
+    _messageCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sendMessage() async {
+    FocusScope.of(context).unfocus();
+    final subject = _subjectCtrl.text.trim();
+    final message = _messageCtrl.text.trim();
+    setState(() {
+      _subjectError = subject.isEmpty ? 'Enter a subject' : null;
+      _messageError = message.isEmpty ? 'Describe your issue' : null;
+    });
+    if (_subjectError != null || _messageError != null) return;
+    setState(() => _sending = true);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    setState(() {
+      _sending = false;
+      _submitted = true;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4568,7 +5090,6 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        // Contact options
         _ContactOptionCard(
           icon: Icons.chat_outlined,
           label: 'Live Chat',
@@ -4598,13 +5119,24 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
           ),
         ),
         const SizedBox(height: 12),
-        const _InputField(hint: 'Subject'),
+        _InputField(
+          hint: 'Subject',
+          controller: _subjectCtrl,
+          errorText: _subjectError,
+          onChanged: (_) => setState(() => _subjectError = null),
+        ),
         const SizedBox(height: 10),
-        const _InputField(hint: 'Describe your issue...', maxLines: 5),
+        _InputField(
+          hint: 'Describe your issue...',
+          controller: _messageCtrl,
+          maxLines: 5,
+          errorText: _messageError,
+          onChanged: (_) => setState(() => _messageError = null),
+        ),
         const SizedBox(height: 16),
         ElevatedButton(
-          onPressed: () => setState(() => _submitted = true),
-          child: const Text('Send Message'),
+          onPressed: _sending ? null : _sendMessage,
+          child: _sending ? const _ButtonSpinner() : const Text('Send Message'),
         ),
       ],
     );
@@ -4715,8 +5247,6 @@ class _ContactOptionCard extends StatelessWidget {
   }
 }
 
-// ─── ABOUT US / GALLERY / TERMS / PRIVACY ────────────────────────────────────
-
 class AboutUsScreen extends StatelessWidget {
   const AboutUsScreen({super.key});
 
@@ -4737,7 +5267,6 @@ class AboutUsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          // Logo / hero area
           Container(
             height: 140,
             decoration: BoxDecoration(
@@ -4782,8 +5311,7 @@ class AboutUsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            // TODO: load from backend CMS / ApiService.getAbout()
-            'Oweitu Cafe is a homegrown café & restaurant based in Kampala, Uganda. We believe great food should be accessible, affordable, and always freshly prepared.\n\nFrom our beloved chapati and katogo breakfasts to freshly baked pizzas and crispy fried chicken, every dish is made with care and quality ingredients.',
+            'Oweitu Cafe is a homegrown café & restaurant based in Mbarara City, Uganda. We believe great food should be accessible, affordable, and always freshly prepared.\n\nFrom our beloved chapati and katogo breakfasts to freshly baked pizzas and crispy fried chicken, every dish is made with care and quality ingredients.',
             style: TextStyle(
               fontSize: fs(context, 13),
               color: AppColors.grayText,
@@ -4799,18 +5327,17 @@ class AboutUsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          // TODO: load branches from ApiService.getBranches()
           _InfoRow(
             icon: Icons.location_on_outlined,
-            text: 'Kampala, Uganda (multiple branches)',
+            text: 'Mbarara City, Uganda (Former SABS)',
           ),
+          const SizedBox(height: 8),
+          _InfoRow(icon: Icons.schedule_outlined, text: 'Mon–Sun: 24/7'),
           const SizedBox(height: 8),
           _InfoRow(
-            icon: Icons.schedule_outlined,
-            text: 'Mon–Sun: 7:00 AM – 10:00 PM',
+            icon: Icons.phone_outlined,
+            text: '+256 705701185 , +256 784283433',
           ),
-          const SizedBox(height: 8),
-          _InfoRow(icon: Icons.phone_outlined, text: '+256 XXX XXX XXX'),
           const SizedBox(height: 8),
           _InfoRow(icon: Icons.email_outlined, text: 'hello@oweitu.com'),
           const SizedBox(height: 8),
@@ -5006,8 +5533,6 @@ You may request access to, correction of, or deletion of your personal data at a
 Our app may use analytics tools that collect anonymised usage data to help us improve the app experience.
 ''';
 
-// ─── ITEM DETAIL SHEET ───────────────────────────────────────────────────────
-
 class MenuItemDetailSheet extends StatefulWidget {
   const MenuItemDetailSheet({super.key, required this.item});
   final MenuItem item;
@@ -5039,7 +5564,6 @@ class _MenuItemDetailSheetState extends State<MenuItemDetailSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Image
           ClipRRect(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
             child: SizedBox(
@@ -5127,7 +5651,6 @@ class _MenuItemDetailSheetState extends State<MenuItemDetailSheet> {
                 const SizedBox(height: 14),
                 Row(
                   children: [
-                    // Qty selector
                     _QtyBtn(
                       icon: Icons.remove,
                       onTap: () {
@@ -5198,8 +5721,6 @@ class _MenuItemDetailSheetState extends State<MenuItemDetailSheet> {
     );
   }
 }
-
-// ─── HOME ────────────────────────────────────────────────────────────────────
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key, required this.onStartOrder});
@@ -5280,8 +5801,6 @@ class HomeScreen extends StatelessWidget {
             ],
           ),
         ),
-
-        // Search bar shortcut
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           child: GestureDetector(
@@ -5317,7 +5836,6 @@ class HomeScreen extends StatelessWidget {
             ),
           ),
         ),
-
         const SizedBox(height: 20),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -5361,7 +5879,6 @@ class HomeScreen extends StatelessWidget {
             ],
           ),
         ),
-
         const SizedBox(height: 20),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -5386,7 +5903,6 @@ class HomeScreen extends StatelessWidget {
             ],
           ),
         ),
-
         const SizedBox(height: 20),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -5546,8 +6062,6 @@ class _QuickPickChip extends StatelessWidget {
   }
 }
 
-// ─── MENU SCREEN (Premium Image-Grid Layout) ─────────────────────────────────
-
 class MenuScreen extends StatelessWidget {
   const MenuScreen({super.key});
 
@@ -5580,7 +6094,6 @@ class MenuScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  // Search shortcut on menu page
                   GestureDetector(
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute(
@@ -5756,8 +6269,6 @@ class _MenuCategoryCard extends StatelessWidget {
   }
 }
 
-// ─── MENU ITEMS SCREEN ───────────────────────────────────────────────────────
-
 class MenuItemsScreen extends StatelessWidget {
   const MenuItemsScreen({super.key, required this.categoryIndex});
   final int categoryIndex;
@@ -5929,7 +6440,6 @@ class _MenuItemGridCard extends StatelessWidget {
                             ),
                           )
                         : Image.asset(item.imagePath!, fit: BoxFit.cover),
-                    // Favourite button
                     Positioned(
                       top: 6,
                       right: 6,
@@ -6021,8 +6531,6 @@ class _MenuItemGridCard extends StatelessWidget {
     );
   }
 }
-
-// ─── PIZZA ITEMS BODY ────────────────────────────────────────────────────────
 
 class _PizzaItemsBody extends StatefulWidget {
   const _PizzaItemsBody();
@@ -6231,8 +6739,6 @@ class _PizzaItemsBodyState extends State<_PizzaItemsBody> {
   }
 }
 
-// ─── REWARDS ─────────────────────────────────────────────────────────────────
-
 class RewardsScreen extends StatelessWidget {
   const RewardsScreen({super.key});
 
@@ -6299,7 +6805,6 @@ class PointsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // TODO: load points from ApiService.getRewardsPoints()
     return Container(
       decoration: BoxDecoration(
         color: AppColors.navy,
@@ -6432,8 +6937,6 @@ class _RewardRow extends StatelessWidget {
     );
   }
 }
-
-// ─── MORE ────────────────────────────────────────────────────────────────────
 
 class MoreScreen extends StatelessWidget {
   const MoreScreen({super.key});
@@ -6571,13 +7074,12 @@ class _MoreRow extends StatelessWidget {
   }
 }
 
-// ─── PROFILE ─────────────────────────────────────────────────────────────────
-
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final state = AppScope.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('PROFILE'),
@@ -6598,8 +7100,7 @@ class ProfileScreen extends StatelessWidget {
             const SizedBox(height: 16),
             Center(
               child: Text(
-                'AIJUKA JOSHUA',
-                // TODO: load from ApiService.getProfile()
+                state.profileName,
                 style: TextStyle(
                   fontSize: fs(context, 20),
                   fontWeight: FontWeight.w900,
@@ -6607,12 +7108,9 @@ class ProfileScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 32),
-            ProfileLine(
-              icon: Icons.mail_outline,
-              text: 'joshuaaijuka10@gmail.com',
-            ),
+            ProfileLine(icon: Icons.mail_outline, text: state.profileEmail),
             const SizedBox(height: 20),
-            ProfileLine(icon: Icons.phone_android, text: '769 583 353'),
+            ProfileLine(icon: Icons.phone_android, text: state.profilePhone),
             const SizedBox(height: 36),
             Center(
               child: Text.rich(
@@ -6630,22 +7128,18 @@ class ProfileScreen extends StatelessWidget {
             ),
             const SizedBox(height: 28),
             ElevatedButton(onPressed: () {}, child: const Text('Edit Profile')),
-            // TODO: call ApiService.updateProfile() on save
             const SizedBox(height: 12),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: AppColors.coral),
               onPressed: () {},
               child: const Text('Delete Account'),
             ),
-            // TODO: call DELETE /api/account on confirm
           ],
         ),
       ),
     );
   }
 }
-
-// ─── DRAWER ──────────────────────────────────────────────────────────────────
 
 class AppDrawer extends StatelessWidget {
   const AppDrawer({super.key});
@@ -6847,8 +7341,6 @@ class DrawerRow extends StatelessWidget {
   }
 }
 
-// ─── BOTTOM NAV ──────────────────────────────────────────────────────────────
-
 class AppBottomNav extends StatelessWidget {
   const AppBottomNav({
     super.key,
@@ -6918,8 +7410,6 @@ class AppBottomNav extends StatelessWidget {
     );
   }
 }
-
-// ─── SHARED WIDGETS ──────────────────────────────────────────────────────────
 
 class ImagePlaceholder extends StatelessWidget {
   const ImagePlaceholder({
@@ -7020,8 +7510,6 @@ class ProfileLine extends StatelessWidget {
   }
 }
 
-// ─── DATA MODELS ─────────────────────────────────────────────────────────────
-
 class NavItem {
   const NavItem({required this.icon, required this.label});
   final IconData icon;
@@ -7048,8 +7536,6 @@ class RewardRow {
   final String title, body;
 }
 
-// ─── COLORS ──────────────────────────────────────────────────────────────────
-
 class AppColors {
   static const sage = Color(0xFF060638);
   static const coral = Color(0xFFE60000);
@@ -7064,8 +7550,6 @@ class AppColors {
   static const placeholderBorder = Color(0xFFD6DEEC);
   static const avatarFill = Color(0xFFE8EEF8);
 }
-
-// ─── STATIC DATA ─────────────────────────────────────────────────────────────
 
 const rewardRows = [
   RewardRow(

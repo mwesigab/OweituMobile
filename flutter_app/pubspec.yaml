@@ -60,6 +60,7 @@ flutter:
   # Assets
   assets:
     - assets/images/
+    - assets/images/Beef/
     - assets/images/Katogo Beef/
     - assets/icons/
 
