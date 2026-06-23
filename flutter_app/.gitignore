@@ -32,6 +32,12 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+/pubspec.lock
+/flutter_app/pubspec.lock
+/flutter_app/.dart_tool/
+/flutter_app/build/
+/flutter_app/.flutter-plugins
+/flutter_app/.flutter-plugins-dependencies
 
 # Symbolication related
 app.*.symbols
@@ -43,3 +49,75 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android build files
+android/.gradle/
+android/app/.cxx/
+android/app/build/
+android/build/
+*.apk
+*.aab
+
+# Node modules (if not needed)
+node_modules/
+npm-debug.log*
+
+# macOS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Flutter specific
+.flutter-version
+.flutter-plugins
+.flutter-plugins-dependencies
+.ios/
+.android/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Firebase
+google-services.json
+GoogleService-Info.plist
+
+# Keys and secrets
+*.pem
+*.p12
+*.keystore
+key.properties
+secrets.dart
+.env
+.env.local
+
+# Testing
+*.test.dart
+*.golden.dart
+.coverage/
+coverage/
+
+# Web
+/web/
+
+# Windows
+/windows/flutter/ephemeral/
+/windows/flutter/generated_plugin_registrant.cc
+/windows/flutter/generated_plugins.cmake
+
+# macOS
+/macos/Flutter/GeneratedPluginRegistrant.swift
+/macos/Flutter/ephemeral/
+
+# Linux
+/linux/flutter/ephemeral/
+
+# Generated files
+*.g.dart
+*.freezed.dart
+*.reflectable.dart
+*.json_serializable.dart

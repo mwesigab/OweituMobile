@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'dart:async';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SharedPreferences.getInstance();
   runApp(const OweituApp());
 }
 
@@ -19,6 +24,13 @@ class OweituApp extends StatefulWidget {
 
 class _OweituAppState extends State<OweituApp> {
   final AppState state = AppState();
+
+  @override
+  void initState() {
+    super.initState();
+    state.loadPersistentData();
+    state.initConnectivity();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -68,7 +80,9 @@ class _OweituAppState extends State<OweituApp> {
                 ),
               ),
             ),
-            home: const HomeShell(),
+            home: state.isAuthenticated
+                ? const HomeShell()
+                : const LoginScreen(),
           );
         },
       ),
@@ -111,16 +125,183 @@ class AppState extends ChangeNotifier {
   String profileName = 'AIJUKA JOSHUA';
   String profileEmail = 'joshuaaijuka10@gmail.com';
   String profilePhone = '769 583 353';
+  bool isOffline = false;
+  bool isLoading = false;
+  String? profileImagePath;
+  bool darkMode = false;
+  String selectedLanguage = 'English';
+  double deliveryFee = 0;
+  double taxRate = 0.08;
+  int loyaltyPoints = 80;
+  List<String> searchHistory = [];
+  String? appliedFilter;
+  String? sortOption;
+  bool isBiometricEnabled = false;
+  Timer? _sessionTimer;
+  StreamSubscription<ConnectivityResult>? _connectivitySubscription;
+  List<Map<String, dynamic>> _offlineActions = [];
 
   int get itemCount => cart.length;
   int get cartSubtotal => cart.fold(0, (sum, i) => sum + i.total);
-  int get cartTotal => (cartSubtotal - promoDiscountAmount).clamp(0, 999999999);
-  bool get isDeliveryValid => deliveryType == 'Takeaway' || cartTotal >= 10000;
+  double get cartTax => cartSubtotal * taxRate;
+  double get cartTotal =>
+      (cartSubtotal - promoDiscountAmount + deliveryFee + cartTax).clamp(
+        0,
+        999999999,
+      );
+  bool get isDeliveryValid =>
+      deliveryType == 'Takeaway' || cartSubtotal >= 10000;
   int get unreadNotificationCount =>
       notifications.where((notification) => notification.unread).length;
+  String get formattedDeliveryFee => 'UGX ${_fmt(deliveryFee.round())}';
+  String get formattedTax => 'UGX ${_fmt(cartTax.round())}';
+  String get formattedTotal => 'UGX ${_fmt(cartTotal.round())}';
+
+  static String _fmt(int n) => n.toString().replaceAllMapped(
+    RegExp(r'(\d)(?=(\d{3})+$)'),
+    (m) => '${m[1]},',
+  );
+
+  void initConnectivity() {
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
+      result,
+    ) {
+      final isConnected = result != ConnectivityResult.none;
+      if (isOffline != !isConnected) {
+        isOffline = !isConnected;
+        notifyListeners();
+        if (!isOffline) {
+          _syncOfflineActions();
+        }
+      }
+    });
+    _checkConnectivity();
+  }
+
+  Future<void> _checkConnectivity() async {
+    final result = await Connectivity().checkConnectivity();
+    isOffline = result == ConnectivityResult.none;
+    notifyListeners();
+  }
+
+  void _syncOfflineActions() {
+    if (_offlineActions.isNotEmpty) {
+      for (final action in _offlineActions) {
+        if (action['type'] == 'add_to_cart') {
+          addToCart(MenuItem(name: action['name'], price: action['price']));
+        }
+      }
+      _offlineActions.clear();
+    }
+  }
+
+  Future<void> loadPersistentData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      darkMode = prefs.getBool('darkMode') ?? false;
+      selectedLanguage = prefs.getString('language') ?? 'English';
+      isBiometricEnabled = prefs.getBool('biometric') ?? false;
+
+      final savedCart = prefs.getStringList('cartItems');
+      if (savedCart != null) {
+        for (final itemJson in savedCart) {
+          final parts = itemJson.split('|||');
+          if (parts.length >= 3) {
+            cart.add(
+              CartItem(
+                name: parts[0],
+                price: int.tryParse(parts[1]) ?? 0,
+                qty: int.tryParse(parts[2]) ?? 1,
+                note: parts.length > 3 ? parts[3] : null,
+              ),
+            );
+          }
+        }
+      }
+
+      final savedFavs = prefs.getStringList('favorites');
+      if (savedFavs != null) {
+        favorites.addAll(savedFavs);
+      }
+
+      final savedAddress = prefs.getString('selectedAddress');
+      if (savedAddress != null) {
+        final parts = savedAddress.split('|||');
+        if (parts.length >= 2) {
+          selectedAddress = DeliveryAddress(
+            label: parts[0],
+            fullAddress: parts[1],
+            instructions: parts.length > 2 ? parts[2] : null,
+          );
+        }
+      }
+
+      profileName = prefs.getString('profileName') ?? profileName;
+      profileEmail = prefs.getString('profileEmail') ?? profileEmail;
+      profilePhone = prefs.getString('profilePhone') ?? profilePhone;
+      profileImagePath = prefs.getString('profileImagePath');
+
+      final savedSearch = prefs.getStringList('searchHistory');
+      if (savedSearch != null) {
+        searchHistory = savedSearch;
+      }
+
+      loyaltyPoints = prefs.getInt('loyaltyPoints') ?? 80;
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error loading persistent data: $e');
+    }
+  }
+
+  Future<void> savePersistentData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      await prefs.setBool('darkMode', darkMode);
+      await prefs.setString('language', selectedLanguage);
+      await prefs.setBool('biometric', isBiometricEnabled);
+
+      final cartList = cart.map((item) {
+        return '${item.name}|||${item.price}|||${item.qty}|||${item.note ?? ''}';
+      }).toList();
+      await prefs.setStringList('cartItems', cartList);
+
+      await prefs.setStringList('favorites', favorites.toList());
+
+      if (selectedAddress != null) {
+        await prefs.setString(
+          'selectedAddress',
+          '${selectedAddress!.label}|||${selectedAddress!.fullAddress}|||${selectedAddress!.instructions ?? ''}',
+        );
+      }
+
+      await prefs.setString('profileName', profileName);
+      await prefs.setString('profileEmail', profileEmail);
+      await prefs.setString('profilePhone', profilePhone);
+      if (profileImagePath != null) {
+        await prefs.setString('profileImagePath', profileImagePath!);
+      }
+
+      await prefs.setStringList('searchHistory', searchHistory);
+      await prefs.setInt('loyaltyPoints', loyaltyPoints);
+
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error saving persistent data: $e');
+    }
+  }
+
+  void setLoading(bool loading) {
+    isLoading = loading;
+    notifyListeners();
+  }
 
   void signIn() {
     isAuthenticated = true;
+    savePersistentData();
+    _startSessionTimer();
     notifyListeners();
   }
 
@@ -133,7 +314,20 @@ class AppState extends ChangeNotifier {
     promoCodeApplied = null;
     promoDiscountAmount = 0;
     deliveryType = 'Delivery';
+    _sessionTimer?.cancel();
+    savePersistentData();
     notifyListeners();
+  }
+
+  void _startSessionTimer() {
+    _sessionTimer?.cancel();
+    _sessionTimer = Timer(const Duration(minutes: 30), () {
+      signOut();
+    });
+  }
+
+  void extendSession() {
+    _startSessionTimer();
   }
 
   void addToCart(MenuItem item, {String? note}) {
@@ -141,10 +335,13 @@ class AppState extends ChangeNotifier {
         .where((c) => c.name == item.name && c.note == note)
         .toList();
     if (existing.isNotEmpty) {
-      existing.first.qty++;
+      if (existing.first.qty < 99) {
+        existing.first.qty++;
+      }
     } else {
       cart.add(CartItem(name: item.name, price: item.price, note: note));
     }
+    savePersistentData();
     notifyListeners();
   }
 
@@ -154,13 +351,39 @@ class AppState extends ChangeNotifier {
     } else {
       cart.remove(item);
     }
+    savePersistentData();
     notifyListeners();
+  }
+
+  void removeFromCartWithUndo(CartItem item, BuildContext context) {
+    final index = cart.indexOf(item);
+    if (index == -1) return;
+    cart.removeAt(index);
+    savePersistentData();
+    notifyListeners();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${item.name} removed from cart'),
+        action: SnackBarAction(
+          label: 'UNDO',
+          onPressed: () {
+            cart.insert(index, item);
+            savePersistentData();
+            notifyListeners();
+          },
+        ),
+        duration: const Duration(seconds: 3),
+        backgroundColor: AppColors.sage,
+      ),
+    );
   }
 
   void clearCart() {
     cart.clear();
     promoCodeApplied = null;
     promoDiscountAmount = 0;
+    savePersistentData();
     notifyListeners();
   }
 
@@ -170,6 +393,7 @@ class AppState extends ChangeNotifier {
     } else {
       favorites.add(itemName);
     }
+    savePersistentData();
     notifyListeners();
   }
 
@@ -177,12 +401,24 @@ class AppState extends ChangeNotifier {
 
   void setAddress(DeliveryAddress address) {
     selectedAddress = address;
+    savePersistentData();
     notifyListeners();
   }
 
   void setDeliveryType(String type) {
     deliveryType = type;
+    if (type == 'Takeaway') {
+      deliveryFee = 0;
+    } else {
+      deliveryFee = calculateDeliveryFee();
+    }
+    savePersistentData();
     notifyListeners();
+  }
+
+  double calculateDeliveryFee() {
+    if (selectedAddress == null) return 5000;
+    return 5000;
   }
 
   void markAllNotificationsRead() {
@@ -217,12 +453,15 @@ class AppState extends ChangeNotifier {
 
   void placeOrder() {
     final id = 'ORD-${DateTime.now().millisecondsSinceEpoch}';
+    final pointsEarned = (cartTotal / 1000).floor();
+    loyaltyPoints += pointsEarned;
+
     orders.insert(
       0,
       Order(
         id: id,
         items: List.from(cart),
-        total: cartTotal,
+        total: cartTotal.round(),
         address: deliveryType == 'Takeaway'
             ? 'Takeaway'
             : (selectedAddress?.label ?? 'Not specified'),
@@ -232,6 +471,86 @@ class AppState extends ChangeNotifier {
       ),
     );
     clearCart();
+    savePersistentData();
+    notifyListeners();
+  }
+
+  void cancelOrder(String orderId) {
+    final order = orders.where((o) => o.id == orderId).firstOrNull;
+    if (order != null && order.status.index <= OrderStatus.confirmed.index) {
+      order.status = OrderStatus.cancelled;
+      notifyListeners();
+    }
+  }
+
+  void reorder(String orderId) {
+    final order = orders.where((o) => o.id == orderId).firstOrNull;
+    if (order != null) {
+      for (final item in order.items) {
+        addToCart(MenuItem(name: item.name, price: item.price));
+      }
+    }
+  }
+
+  void addSearchHistory(String query) {
+    if (query.trim().isEmpty) return;
+    searchHistory.remove(query);
+    searchHistory.insert(0, query);
+    if (searchHistory.length > 10) {
+      searchHistory.removeLast();
+    }
+    savePersistentData();
+    notifyListeners();
+  }
+
+  void clearSearchHistory() {
+    searchHistory.clear();
+    savePersistentData();
+    notifyListeners();
+  }
+
+  void setFilter(String? filter) {
+    appliedFilter = filter;
+    notifyListeners();
+  }
+
+  void setSortOption(String? option) {
+    sortOption = option;
+    notifyListeners();
+  }
+
+  void toggleDarkMode() {
+    darkMode = !darkMode;
+    savePersistentData();
+    notifyListeners();
+  }
+
+  void setLanguage(String language) {
+    selectedLanguage = language;
+    savePersistentData();
+    notifyListeners();
+  }
+
+  void updateProfile({
+    String? name,
+    String? email,
+    String? phone,
+    String? imagePath,
+  }) {
+    if (name != null) profileName = name;
+    if (email != null) profileEmail = email;
+    if (phone != null) profilePhone = phone;
+    if (imagePath != null) profileImagePath = imagePath;
+    savePersistentData();
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _sessionTimer?.cancel();
+    _connectivitySubscription?.cancel();
+    savePersistentData();
+    super.dispose();
   }
 }
 
@@ -280,6 +599,12 @@ class MenuItem {
     this.isNew = false,
     this.prepTimeMinutes,
     this.calories,
+    this.isVegetarian = false,
+    this.isGlutenFree = false,
+    this.isSpicy = false,
+    this.rating = 0,
+    this.reviewCount = 0,
+    this.available = true,
   });
   final String name;
   final int price;
@@ -291,6 +616,12 @@ class MenuItem {
   final bool isNew;
   final int? prepTimeMinutes;
   final int? calories;
+  final bool isVegetarian;
+  final bool isGlutenFree;
+  final bool isSpicy;
+  final double rating;
+  final int reviewCount;
+  final bool available;
 
   String get priceFormatted => 'UGX ${_fmt(price)}';
   static String _fmt(int n) => n.toString().replaceAllMapped(
@@ -352,6 +683,11 @@ class Order {
     this.status = OrderStatus.placed,
     this.estimatedMinutes,
     required this.deliveryType,
+    this.deliveryFee = 0,
+    this.tax = 0,
+    this.discount = 0,
+    this.rating = 0,
+    this.review = '',
   });
   final String id;
   final List<CartItem> items;
@@ -361,6 +697,11 @@ class Order {
   OrderStatus status;
   final int? estimatedMinutes;
   final String deliveryType;
+  final double deliveryFee;
+  final double tax;
+  final double discount;
+  double rating;
+  String review;
 
   String get statusLabel {
     switch (status) {
@@ -395,6 +736,14 @@ class Order {
         return Icons.cancel_outlined;
     }
   }
+
+  int get elapsedMinutes => DateTime.now().difference(placedAt).inMinutes;
+  String get estimatedTime {
+    if (estimatedMinutes == null) return 'Calculating...';
+    final remaining = estimatedMinutes! - elapsedMinutes;
+    if (remaining <= 0) return 'Arriving soon';
+    return '${remaining} min';
+  }
 }
 
 class DeliveryAddress {
@@ -403,11 +752,33 @@ class DeliveryAddress {
     required this.fullAddress,
     this.instructions,
     this.isDefault = false,
+    this.latitude,
+    this.longitude,
   });
   final String label;
   final String fullAddress;
   final String? instructions;
   final bool isDefault;
+  final double? latitude;
+  final double? longitude;
+
+  DeliveryAddress copyWith({
+    String? label,
+    String? fullAddress,
+    String? instructions,
+    bool? isDefault,
+    double? latitude,
+    double? longitude,
+  }) {
+    return DeliveryAddress(
+      label: label ?? this.label,
+      fullAddress: fullAddress ?? this.fullAddress,
+      instructions: instructions ?? this.instructions,
+      isDefault: isDefault ?? this.isDefault,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+    );
+  }
 }
 
 class ApiService {
@@ -573,106 +944,189 @@ class ApiService {
   }
 }
 
+// ... rest of your code continues here (snacks, breakfast, burgers, drinks, teas, pizzas, menuCategories, LoginScreen, etc.)
 const snacks = [
   MenuItem(
     name: 'Chips, 2 Pcs of Chicken and a Soda',
     price: 17000,
     imagePath: 'assets/images/Beef/2pacs of chicken and Chips.jpg',
+    prepTimeMinutes: 15,
+    rating: 4.5,
+    reviewCount: 128,
+    tags: ['Popular', 'Chicken'],
   ),
   MenuItem(
     name: 'Chips, 3 Pcs of Chicken and a Soda',
     price: 23000,
     imagePath: 'assets/images/3pacs of chicken and soda.jpg',
+    prepTimeMinutes: 20,
+    rating: 4.7,
+    reviewCount: 95,
+    tags: ['Popular', 'Chicken'],
   ),
   MenuItem(
     name: 'Chips, 4 Pcs of Chicken and a Soda',
     price: 27000,
     imagePath: 'assets/images/Beef/4pacs of chicken and Chips.jpg',
+    prepTimeMinutes: 20,
+    rating: 4.8,
+    reviewCount: 76,
+    tags: ['Chicken'],
   ),
   MenuItem(
     name: '5 Pcs Chicken, 2 Regular Chips & 2 Drinks',
     price: 35000,
     imagePath: 'assets/images/Beef/5pacs of chicken and Chips.jpg',
+    prepTimeMinutes: 25,
+    rating: 4.9,
+    reviewCount: 52,
+    tags: ['Popular', 'Family Meal'],
   ),
   MenuItem(
     name: 'Chips Liver and Drink',
     price: 14000,
     imagePath: 'assets/images/Beef/Chips and Liver.jpg',
+    prepTimeMinutes: 12,
+    rating: 4.3,
+    reviewCount: 67,
+    tags: ['Beef'],
   ),
   MenuItem(
     name: 'Chips Beef and Drink',
     price: 14000,
     imagePath: 'assets/images/Beef/Chips and Beef.jpg',
+    prepTimeMinutes: 12,
+    rating: 4.4,
+    reviewCount: 89,
+    tags: ['Beef'],
   ),
   MenuItem(
     name: 'Stewed Rice, Liver and Drink',
     price: 14000,
     imagePath: 'assets/images/Beef/Stewed Rice and Liver.jpg',
+    prepTimeMinutes: 15,
+    rating: 4.2,
+    reviewCount: 45,
+    tags: ['Beef', 'Rice'],
   ),
   MenuItem(
     name: 'Stewed Rice, Beef and Drink',
     price: 14000,
     imagePath: 'assets/images/Beef/Stewed Rice and Beef.jpg',
+    prepTimeMinutes: 15,
+    rating: 4.5,
+    reviewCount: 78,
+    tags: ['Beef', 'Rice'],
   ),
   MenuItem(
     name: 'Pair of Sausages, Chips and Drink',
     price: 11000,
     imagePath: 'assets/images/Beef/Pair of Sausages and Chips.jpg',
+    prepTimeMinutes: 10,
+    rating: 4.1,
+    reviewCount: 34,
+    tags: ['Sausage'],
   ),
   MenuItem(
     name: 'Whole Fish, Chips and Drink',
     price: 26000,
     imagePath: 'assets/images/Beef/Whole Fish and Chips .jpg',
+    prepTimeMinutes: 25,
+    rating: 4.6,
+    reviewCount: 42,
+    tags: ['Fish', 'Popular'],
   ),
   MenuItem(
     name: 'Chips, 1 Chap and 1 Drink',
     price: 12000,
     imagePath: 'assets/images/Beef/Chips and 1 chap.jpg',
+    prepTimeMinutes: 10,
+    rating: 4.0,
+    reviewCount: 56,
+    tags: ['Chapati'],
   ),
   MenuItem(
     name: 'Palau Beef and a Drink',
     price: 14000,
     imagePath: 'assets/images/Beef/Pilawo and Beef.jpg',
+    prepTimeMinutes: 18,
+    rating: 4.4,
+    reviewCount: 63,
+    tags: ['Beef', 'Rice'],
   ),
   MenuItem(
     name: 'Chicken / Beef Burger, Chips and Drink',
     price: 25000,
     imagePath: 'assets/images/Beef/Beef Burger and Chips.jpg',
+    prepTimeMinutes: 15,
+    rating: 4.7,
+    reviewCount: 112,
+    tags: ['Burger', 'Popular'],
   ),
   MenuItem(
     name: 'Chips, Goats Meat and a Drink',
     price: 17000,
     imagePath: "assets/images/Beef/Chips and Goat's meat.jpg",
+    prepTimeMinutes: 20,
+    rating: 4.3,
+    reviewCount: 38,
+    tags: ['Goat Meat'],
   ),
   MenuItem(
     name: 'Half Chips, Half Rice with Liver / Gravy / Beef',
     price: 16000,
     imagePath: 'assets/images/Beef/Rice with LIver.jpg',
+    prepTimeMinutes: 15,
+    rating: 4.2,
+    reviewCount: 47,
+    tags: ['Mixed'],
   ),
   MenuItem(
     name: 'Beef / Liver Plain',
     price: 7000,
     imagePath: 'assets/images/Beef/Liver Plain.jpg',
+    prepTimeMinutes: 8,
+    rating: 4.1,
+    reviewCount: 29,
+    tags: ['Beef'],
   ),
   MenuItem(
     name: 'Plain Chips',
     price: 7000,
     imagePath: 'assets/images/Plain Chips.jpg',
+    prepTimeMinutes: 8,
+    rating: 4.0,
+    reviewCount: 45,
+    tags: ['Vegetarian'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Fish Fillet Plain (2 Pcs)',
     price: 11000,
     imagePath: 'assets/images/Fish Fillet Plain.jpg',
+    prepTimeMinutes: 12,
+    rating: 4.4,
+    reviewCount: 33,
+    tags: ['Fish'],
   ),
   MenuItem(
     name: 'Pilawo Plain',
     price: 7000,
     imagePath: 'assets/images/Pilawo Plain.jpg',
+    prepTimeMinutes: 10,
+    rating: 4.2,
+    reviewCount: 41,
+    tags: ['Vegetarian', 'Rice'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Plain Chicken',
     price: 9000,
     imagePath: 'assets/images/Plain Chicken.jpg',
+    prepTimeMinutes: 10,
+    rating: 4.5,
+    reviewCount: 58,
+    tags: ['Chicken'],
   ),
 ];
 
@@ -681,67 +1135,132 @@ const breakfast = [
     name: 'Katogo Vegetables',
     price: 6000,
     imagePath: 'assets/images/Katogo Vegetables.jpg',
+    prepTimeMinutes: 10,
+    rating: 4.3,
+    reviewCount: 67,
+    tags: ['Vegetarian', 'Breakfast'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Katogo Beef / Liver',
     price: 8000,
     imagePath: 'assets/images/Katogo Beef/ Liver.jpg',
+    prepTimeMinutes: 12,
+    rating: 4.6,
+    reviewCount: 89,
+    tags: ['Beef', 'Breakfast'],
   ),
   MenuItem(
     name: 'A Pair of Beef Samosa',
     price: 2000,
     imagePath: 'assets/images/Katogo Beef/Beef Samosa.jpg',
+    prepTimeMinutes: 5,
+    rating: 4.2,
+    reviewCount: 45,
+    tags: ['Beef', 'Snack'],
   ),
   MenuItem(
     name: 'Plain Omelette',
     price: 2500,
     imagePath: 'assets/images/Katogo Beef/Plain Omelette.jpg',
+    prepTimeMinutes: 5,
+    rating: 4.4,
+    reviewCount: 78,
+    tags: ['Egg', 'Breakfast'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Spanish Omelette',
     price: 3000,
     imagePath: 'assets/images/Katogo Beef/Spanish Omelette.jpg',
+    prepTimeMinutes: 7,
+    rating: 4.5,
+    reviewCount: 56,
+    tags: ['Egg', 'Breakfast'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Chapati and Beans',
     price: 3000,
     imagePath: 'assets/images/Katogo Beef/Chapati and Beans.jpg',
+    prepTimeMinutes: 8,
+    rating: 4.3,
+    reviewCount: 92,
+    tags: ['Vegetarian', 'Breakfast'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Plain Chapati',
     price: 2000,
     imagePath: 'assets/images/Katogo Beef/Plain Chapatti.jpg',
+    prepTimeMinutes: 5,
+    rating: 4.1,
+    reviewCount: 67,
+    tags: ['Vegetarian', 'Breakfast'],
+    isVegetarian: true,
   ),
-  MenuItem(name: 'Chapati and Gravy', price: 3000),
+  MenuItem(
+    name: 'Chapati and Gravy',
+    price: 3000,
+    prepTimeMinutes: 6,
+    rating: 4.2,
+    reviewCount: 54,
+    tags: ['Breakfast'],
+  ),
   MenuItem(
     name: 'Kebab Plain',
     price: 3000,
     imagePath: 'assets/images/Katogo Beef/Kebab Plain.jpg',
+    prepTimeMinutes: 7,
+    rating: 4.0,
+    reviewCount: 34,
+    tags: ['Snack'],
   ),
   MenuItem(
     name: 'Chaps Plain',
     price: 3000,
     imagePath: 'assets/images/Katogo Beef/Chap Plain.jpg',
+    prepTimeMinutes: 5,
+    rating: 4.1,
+    reviewCount: 29,
+    tags: ['Breakfast'],
   ),
   MenuItem(
     name: 'A Pair of Sausage Plain',
     price: 2000,
     imagePath: 'assets/images/Katogo Beef/Pair of Sausage.jpg',
+    prepTimeMinutes: 5,
+    rating: 4.0,
+    reviewCount: 38,
+    tags: ['Sausage'],
   ),
   MenuItem(
     name: 'Beef Sandwich',
     price: 8000,
     imagePath: 'assets/images/Katogo Beef/Beef Sandwich.jpg',
+    prepTimeMinutes: 10,
+    rating: 4.6,
+    reviewCount: 72,
+    tags: ['Beef', 'Sandwich'],
   ),
   MenuItem(
     name: 'Chicken Sandwich',
     price: 8000,
     imagePath: 'assets/images/Katogo Beef/chicken sandwich.jpg',
+    prepTimeMinutes: 10,
+    rating: 4.7,
+    reviewCount: 85,
+    tags: ['Chicken', 'Sandwich'],
   ),
   MenuItem(
     name: 'Eggs Sandwich',
     price: 5000,
     imagePath: 'assets/images/Katogo Beef/Egg Sandwich.jpg',
+    prepTimeMinutes: 8,
+    rating: 4.4,
+    reviewCount: 63,
+    tags: ['Egg', 'Sandwich'],
+    isVegetarian: true,
   ),
 ];
 
@@ -750,21 +1269,38 @@ const burgers = [
     name: 'Plain Chicken Burger',
     price: 13000,
     imagePath: 'assets/images/Chicken Burger.jpg',
+    prepTimeMinutes: 12,
+    rating: 4.8,
+    reviewCount: 156,
+    tags: ['Chicken', 'Burger', 'Popular'],
   ),
   MenuItem(
     name: 'Beef Burger Plain',
     price: 11000,
     imagePath: 'assets/images/Beef Burger.jpg',
+    prepTimeMinutes: 12,
+    rating: 4.6,
+    reviewCount: 134,
+    tags: ['Beef', 'Burger', 'Popular'],
   ),
   MenuItem(
     name: 'Vegetable Burger Plain',
     price: 9000,
     imagePath: 'assets/images/Vegetable Burger.jpg',
+    prepTimeMinutes: 10,
+    rating: 4.3,
+    reviewCount: 78,
+    tags: ['Vegetarian', 'Burger'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Cheese Burger',
     price: 9000,
     imagePath: 'assets/images/Cheese Burger.jpg',
+    prepTimeMinutes: 10,
+    rating: 4.5,
+    reviewCount: 92,
+    tags: ['Burger', 'Cheese'],
   ),
 ];
 
@@ -773,13 +1309,37 @@ const drinks = [
     name: 'Minute Maid',
     price: 3000,
     imagePath: 'assets/images/Minute Maid.jpg',
+    rating: 4.2,
+    reviewCount: 45,
+    tags: ['Cold Drink', 'Juice'],
+    isVegetarian: true,
   ),
-  MenuItem(name: 'Soda', price: 2000, imagePath: 'assets/images/Soda.jpg'),
-  MenuItem(name: 'Water', price: 2000, imagePath: 'assets/images/Water.jpg'),
+  MenuItem(
+    name: 'Soda',
+    price: 2000,
+    imagePath: 'assets/images/Soda.jpg',
+    rating: 4.0,
+    reviewCount: 67,
+    tags: ['Cold Drink'],
+    isVegetarian: true,
+  ),
+  MenuItem(
+    name: 'Water',
+    price: 2000,
+    imagePath: 'assets/images/Water.jpg',
+    rating: 4.1,
+    reviewCount: 89,
+    tags: ['Cold Drink'],
+    isVegetarian: true,
+  ),
   MenuItem(
     name: 'Mixed Passion and Mangoes Juice',
     price: 4000,
     imagePath: 'assets/images/Mixed passion & mango.jpg',
+    rating: 4.6,
+    reviewCount: 56,
+    tags: ['Juice', 'Popular'],
+    isVegetarian: true,
   ),
 ];
 
@@ -788,41 +1348,81 @@ const teas = [
     name: 'Black Tea',
     price: 3000,
     imagePath: 'assets/images/Black Tea.jpg',
+    prepTimeMinutes: 5,
+    rating: 4.3,
+    reviewCount: 78,
+    tags: ['Hot Drink', 'Tea'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'African Tea',
     price: 4000,
     imagePath: 'assets/images/African Tea.jpg',
+    prepTimeMinutes: 7,
+    rating: 4.7,
+    reviewCount: 112,
+    tags: ['Hot Drink', 'Tea', 'Popular'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Herbal Tea',
     price: 5000,
     imagePath: 'assets/images/Herbal Tea.jpg',
+    prepTimeMinutes: 7,
+    rating: 4.4,
+    reviewCount: 67,
+    tags: ['Hot Drink', 'Tea'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Hot Chocolate',
     price: 6000,
     imagePath: 'assets/images/Hot Chocolate.jpg',
+    prepTimeMinutes: 7,
+    rating: 4.8,
+    reviewCount: 89,
+    tags: ['Hot Drink', 'Popular'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'English Tea (Hot Water & Milk Aside)',
     price: 6000,
     imagePath: 'assets/images/English Tea.jpg',
+    prepTimeMinutes: 8,
+    rating: 4.5,
+    reviewCount: 56,
+    tags: ['Hot Drink', 'Tea'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Tea Masala',
     price: 5000,
     imagePath: 'assets/images/Tea Masala.jpg',
+    prepTimeMinutes: 7,
+    rating: 4.6,
+    reviewCount: 78,
+    tags: ['Hot Drink', 'Tea', 'Popular'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Dawa Tea (Lemon, Ginger, Cinnamon & Honey)',
     price: 6000,
     imagePath: 'assets/images/Dawa Tea.jpg',
+    prepTimeMinutes: 8,
+    rating: 4.9,
+    reviewCount: 45,
+    tags: ['Hot Drink', 'Tea', 'Popular'],
+    isVegetarian: true,
   ),
   MenuItem(
     name: 'Iced Tea',
     price: 4000,
     imagePath: 'assets/images/Iced Tea.jpg',
+    prepTimeMinutes: 5,
+    rating: 4.3,
+    reviewCount: 67,
+    tags: ['Cold Drink', 'Tea'],
+    isVegetarian: true,
   ),
 ];
 
@@ -833,6 +1433,7 @@ const pizzas = [
     medium: 30000,
     large: 35000,
     imagePath: 'assets/images/ChickenTikka.jpg',
+    description: 'Spicy chicken tikka with bell peppers and onions',
   ),
   PizzaItem(
     name: 'Chicken BBQ Pizza',
@@ -840,6 +1441,7 @@ const pizzas = [
     medium: 30000,
     large: 35000,
     imagePath: 'assets/images/Chicken BBq.jpg',
+    description: 'BBQ chicken with red onions and cilantro',
   ),
   PizzaItem(
     name: 'Chicken and Mushroom Pizza',
@@ -847,6 +1449,7 @@ const pizzas = [
     medium: 30000,
     large: 35000,
     imagePath: 'assets/images/Chicken Mushroom.jpg',
+    description: 'Grilled chicken with fresh mushrooms',
   ),
   PizzaItem(
     name: 'Beef Tikka Pizza',
@@ -854,6 +1457,7 @@ const pizzas = [
     medium: 30000,
     large: 35000,
     imagePath: 'assets/images/BeefTikka.jpg',
+    description: 'Spicy beef tikka with peppers and onions',
   ),
   PizzaItem(
     name: 'Vegetable Pizza',
@@ -861,6 +1465,7 @@ const pizzas = [
     medium: 30000,
     large: 35000,
     imagePath: 'assets/images/Vegetable Pizza.jpg',
+    description: 'Fresh vegetables with mozzarella cheese',
   ),
   PizzaItem(
     name: 'Hawaiian Pizza',
@@ -868,6 +1473,7 @@ const pizzas = [
     medium: 30000,
     large: 35000,
     imagePath: 'assets/images/Hawaiin Pizza.jpg',
+    description: 'Ham and pineapple with mozzarella',
   ),
   PizzaItem(
     name: 'Margherita Pizza',
@@ -875,6 +1481,8 @@ const pizzas = [
     medium: 30000,
     large: 35000,
     imagePath: 'assets/images/Margherita Pizza.jpg',
+    description: 'Classic tomato, basil, and mozzarella',
+    isPopular: true,
   ),
   PizzaItem(
     name: 'Oweitu Pizza Special',
@@ -882,6 +1490,8 @@ const pizzas = [
     medium: 35000,
     large: 40000,
     imagePath: 'assets/images/Oweitu Special.jpg',
+    description: 'Our signature pizza with everything!',
+    isPopular: true,
   ),
 ];
 
@@ -900,6 +1510,9 @@ List<MenuItem> get allMenuItems {
         price: p.small,
         imagePath: p.imagePath,
         note: 'from',
+        description: p.description,
+        rating: 4.5,
+        reviewCount: 45,
       ),
     );
   }
@@ -1215,6 +1828,7 @@ class _SignInFormState extends State<_SignInForm> {
   String? _identifierError;
   String? _passwordError;
   bool _loading = false;
+  bool _obscurePassword = true;
 
   @override
   void dispose() {
@@ -1247,7 +1861,7 @@ class _SignInFormState extends State<_SignInForm> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Welcome back 👋',
+          'Welcome to Oweitu Cafe',
           style: TextStyle(
             fontSize: fs(context, 18),
             fontWeight: FontWeight.w800,
@@ -1274,9 +1888,18 @@ class _SignInFormState extends State<_SignInForm> {
         _InputField(
           hint: 'Password',
           controller: _passwordCtrl,
-          obscure: true,
+          obscure: _obscurePassword,
           errorText: _passwordError,
           onChanged: (_) => setState(() => _passwordError = null),
+          suffixIcon: IconButton(
+            icon: Icon(
+              _obscurePassword ? Icons.visibility_off : Icons.visibility,
+              size: 18,
+              color: AppColors.mutedText,
+            ),
+            onPressed: () =>
+                setState(() => _obscurePassword = !_obscurePassword),
+          ),
         ),
         const SizedBox(height: 6),
         Align(
@@ -1334,6 +1957,8 @@ class _SignUpFormState extends State<_SignUpForm> {
   String? _identifierError;
   String? _passwordError;
   String? _confirmError;
+  bool _obscurePassword = true;
+  bool _obscureConfirm = true;
 
   @override
   void dispose() {
@@ -1483,17 +2108,34 @@ class _SignUpFormState extends State<_SignUpForm> {
         _InputField(
           hint: 'Password',
           controller: _passwordCtrl,
-          obscure: true,
+          obscure: _obscurePassword,
           errorText: _passwordError,
           onChanged: (_) => setState(() => _passwordError = null),
+          suffixIcon: IconButton(
+            icon: Icon(
+              _obscurePassword ? Icons.visibility_off : Icons.visibility,
+              size: 18,
+              color: AppColors.mutedText,
+            ),
+            onPressed: () =>
+                setState(() => _obscurePassword = !_obscurePassword),
+          ),
         ),
         const SizedBox(height: 10),
         _InputField(
           hint: 'Confirm password',
           controller: _confirmCtrl,
-          obscure: true,
+          obscure: _obscureConfirm,
           errorText: _confirmError,
           onChanged: (_) => setState(() => _confirmError = null),
+          suffixIcon: IconButton(
+            icon: Icon(
+              _obscureConfirm ? Icons.visibility_off : Icons.visibility,
+              size: 18,
+              color: AppColors.mutedText,
+            ),
+            onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm),
+          ),
         ),
         const SizedBox(height: 16),
         SizedBox(
@@ -1813,6 +2455,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    final state = AppScope.of(context);
     final titles = ['HOME', 'MENU', 'REWARDS', 'MORE'];
     final pages = [
       HomeScreen(onStartOrder: () => selectTab(1)),
@@ -1831,8 +2474,25 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ),
         actions: [
+          if (state.isOffline)
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.coral,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                'OFFLINE',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: fs(context, 8),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
           _NotificationBell(),
-          if (tabIndex == 1)
+          if (tabIndex == 1 || tabIndex == 0)
             Stack(
               alignment: Alignment.center,
               children: [
@@ -2017,12 +2677,30 @@ class _CartSheetState extends State<CartSheet> {
             if (cart.isEmpty)
               Padding(
                 padding: const EdgeInsets.all(32),
-                child: Text(
-                  'Your cart is empty',
-                  style: TextStyle(
-                    fontSize: fs(context, 14),
-                    color: AppColors.mutedText,
-                  ),
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.shopping_bag_outlined,
+                      size: 48,
+                      color: AppColors.line,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Your cart is empty',
+                      style: TextStyle(
+                        fontSize: fs(context, 14),
+                        color: AppColors.mutedText,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Browse our menu and add items you love!',
+                      style: TextStyle(
+                        fontSize: fs(context, 12),
+                        color: AppColors.mutedText,
+                      ),
+                    ),
+                  ],
                 ),
               )
             else ...[
@@ -2038,74 +2716,102 @@ class _CartSheetState extends State<CartSheet> {
                         horizontal: 20,
                         vertical: 6,
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      item.name,
-                                      style: TextStyle(
-                                        fontSize: fs(context, 13),
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    Text(
-                                      '${MenuItem._fmt(item.price)} UGX',
-                                      style: TextStyle(
-                                        fontSize: fs(context, 11),
-                                        color: AppColors.mutedText,
-                                      ),
-                                    ),
-                                    if (item.note != null &&
-                                        item.note!.isNotEmpty)
+                      child: Dismissible(
+                        key: Key('${item.name}_${i}'),
+                        direction: DismissDirection.endToStart,
+                        onDismissed: (_) {
+                          state.removeFromCart(item);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('${item.name} removed'),
+                              backgroundColor: AppColors.coral,
+                              duration: const Duration(seconds: 1),
+                            ),
+                          );
+                        },
+                        background: Container(
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.only(right: 16),
+                          decoration: BoxDecoration(
+                            color: AppColors.coral,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.white,
+                            size: 24,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
                                       Text(
-                                        '📝 ${item.note}',
+                                        item.name,
                                         style: TextStyle(
-                                          fontSize: fs(context, 10),
-                                          color: AppColors.grayText,
-                                          fontStyle: FontStyle.italic,
+                                          fontSize: fs(context, 13),
+                                          fontWeight: FontWeight.w600,
                                         ),
                                       ),
+                                      Text(
+                                        '${MenuItem._fmt(item.price)} UGX',
+                                        style: TextStyle(
+                                          fontSize: fs(context, 11),
+                                          color: AppColors.mutedText,
+                                        ),
+                                      ),
+                                      if (item.note != null &&
+                                          item.note!.isNotEmpty)
+                                        Text(
+                                          '📝 ${item.note}',
+                                          style: TextStyle(
+                                            fontSize: fs(context, 10),
+                                            color: AppColors.grayText,
+                                            fontStyle: FontStyle.italic,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                Row(
+                                  children: [
+                                    _QtyBtn(
+                                      icon: Icons.remove,
+                                      onTap: () => state.removeFromCart(item),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                      ),
+                                      child: Text(
+                                        '${item.qty}',
+                                        style: TextStyle(
+                                          fontSize: fs(context, 14),
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                    _QtyBtn(
+                                      icon: Icons.add,
+                                      onTap: () => state.addToCart(
+                                        MenuItem(
+                                          name: item.name,
+                                          price: item.price,
+                                        ),
+                                      ),
+                                    ),
                                   ],
                                 ),
-                              ),
-                              Row(
-                                children: [
-                                  _QtyBtn(
-                                    icon: Icons.remove,
-                                    onTap: () => state.removeFromCart(item),
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                    ),
-                                    child: Text(
-                                      '${item.qty}',
-                                      style: TextStyle(
-                                        fontSize: fs(context, 14),
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ),
-                                  _QtyBtn(
-                                    icon: Icons.add,
-                                    onTap: () => state.addToCart(
-                                      MenuItem(
-                                        name: item.name,
-                                        price: item.price,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ],
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     );
                   },
@@ -2402,6 +3108,48 @@ class _CartSheetState extends State<CartSheet> {
                         ),
                       ],
                     ),
+                    if (state.deliveryType == 'Delivery' &&
+                        state.deliveryFee > 0) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Text(
+                            'Delivery',
+                            style: TextStyle(
+                              fontSize: fs(context, 13),
+                              color: AppColors.mutedText,
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            state.formattedDeliveryFee,
+                            style: TextStyle(
+                              fontSize: fs(context, 13),
+                              color: AppColors.mutedText,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    Row(
+                      children: [
+                        Text(
+                          'Tax',
+                          style: TextStyle(
+                            fontSize: fs(context, 13),
+                            color: AppColors.mutedText,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          state.formattedTax,
+                          style: TextStyle(
+                            fontSize: fs(context, 13),
+                            color: AppColors.mutedText,
+                          ),
+                        ),
+                      ],
+                    ),
                     if (state.promoDiscountAmount > 0) ...[
                       const SizedBox(height: 4),
                       Row(
@@ -2437,7 +3185,7 @@ class _CartSheetState extends State<CartSheet> {
                         ),
                         const Spacer(),
                         Text(
-                          'UGX ${MenuItem._fmt(state.cartTotal)}',
+                          state.formattedTotal,
                           style: TextStyle(
                             fontSize: fs(context, 15),
                             fontWeight: FontWeight.w800,
@@ -2567,21 +3315,11 @@ class _QtyBtn extends StatelessWidget {
 class AddressPickerSheet extends StatelessWidget {
   const AddressPickerSheet({super.key});
 
-  static final List<DeliveryAddress> _sampleAddresses = [
-    DeliveryAddress(
-      label: 'Home',
-      fullAddress: 'Plot 14, Bukoto Street, Kampala',
-      isDefault: true,
-    ),
-    DeliveryAddress(
-      label: 'Work',
-      fullAddress: 'Workers House, Pilkington Road, Kampala',
-    ),
-  ];
-
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final addresses = _getAddresses();
+
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -2611,7 +3349,7 @@ class AddressPickerSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          ..._sampleAddresses.map(
+          ...addresses.map(
             (addr) => ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Container(
@@ -2684,9 +3422,39 @@ class AddressPickerSheet extends StatelessWidget {
               );
             },
           ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.gps_fixed, size: 14, color: AppColors.sage),
+              const SizedBox(width: 4),
+              Text(
+                'Use current location',
+                style: TextStyle(
+                  fontSize: fs(context, 12),
+                  color: AppColors.sage,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
+  }
+
+  List<DeliveryAddress> _getAddresses() {
+    return [
+      DeliveryAddress(
+        label: 'Home',
+        fullAddress: 'Plot 14, Bukoto Street, Kampala',
+        isDefault: true,
+      ),
+      DeliveryAddress(
+        label: 'Work',
+        fullAddress: 'Workers House, Pilkington Road, Kampala',
+      ),
+    ];
   }
 }
 
@@ -2732,9 +3500,12 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
     );
     AppScope.of(context).setAddress(addr);
     Navigator.of(context).pop();
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Address saved!')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Address saved!'),
+        backgroundColor: AppColors.sage,
+      ),
+    );
   }
 
   @override
@@ -2763,38 +3534,36 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          Row(
+          Wrap(
+            spacing: 8,
             children: _quickLabels
                 .map(
-                  (label) => Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: GestureDetector(
-                      onTap: () => setState(() => _selectedLabel = label),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
+                  (label) => GestureDetector(
+                    onTap: () => setState(() => _selectedLabel = label),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _selectedLabel == label
+                            ? AppColors.sage
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
                           color: _selectedLabel == label
                               ? AppColors.sage
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: _selectedLabel == label
-                                ? AppColors.sage
-                                : AppColors.line,
-                          ),
+                              : AppColors.line,
                         ),
-                        child: Text(
-                          label,
-                          style: TextStyle(
-                            fontSize: fs(context, 12),
-                            fontWeight: FontWeight.w700,
-                            color: _selectedLabel == label
-                                ? Colors.white
-                                : AppColors.mutedText,
-                          ),
+                      ),
+                      child: Text(
+                        label,
+                        style: TextStyle(
+                          fontSize: fs(context, 12),
+                          fontWeight: FontWeight.w700,
+                          color: _selectedLabel == label
+                              ? Colors.white
+                              : AppColors.mutedText,
                         ),
                       ),
                     ),
@@ -2855,6 +3624,7 @@ class CheckoutScreen extends StatefulWidget {
 class _CheckoutScreenState extends State<CheckoutScreen> {
   String _selectedPayment = 'Mobile Money';
   bool _placingOrder = false;
+  bool _useLoyaltyPoints = false;
   final List<String> _paymentMethods = [
     'Mobile Money',
     'Cash on Delivery',
@@ -3085,6 +3855,58 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   ),
                 ),
                 const Divider(color: AppColors.line, height: 1),
+                if (state.deliveryType == 'Delivery') ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Text(
+                          'Delivery Fee',
+                          style: TextStyle(
+                            fontSize: fs(context, 13),
+                            color: AppColors.mutedText,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          state.formattedDeliveryFee,
+                          style: TextStyle(
+                            fontSize: fs(context, 13),
+                            color: AppColors.mutedText,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      Text(
+                        'Tax',
+                        style: TextStyle(
+                          fontSize: fs(context, 13),
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        state.formattedTax,
+                        style: TextStyle(
+                          fontSize: fs(context, 13),
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 if (state.promoDiscountAmount > 0)
                   Padding(
                     padding: const EdgeInsets.symmetric(
@@ -3125,7 +3947,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       ),
                       const Spacer(),
                       Text(
-                        'UGX ${MenuItem._fmt(state.cartTotal)}',
+                        state.formattedTotal,
                         style: TextStyle(
                           fontSize: fs(context, 14),
                           fontWeight: FontWeight.w900,
@@ -3211,6 +4033,51 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               }).toList(),
             ),
           ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF5F5F5),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.emoji_events_outlined,
+                  size: 20,
+                  color: AppColors.gold,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Loyalty Points Available: ${state.loyaltyPoints} pts',
+                        style: TextStyle(
+                          fontSize: fs(context, 12),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        '1,000 pts = UGX 10,000 discount',
+                        style: TextStyle(
+                          fontSize: fs(context, 11),
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (state.loyaltyPoints >= 1000)
+                  Switch(
+                    value: _useLoyaltyPoints,
+                    onChanged: (v) => setState(() => _useLoyaltyPoints = v),
+                    activeColor: AppColors.sage,
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: Container(
@@ -3270,7 +4137,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           child: _placingOrder
               ? const _ButtonSpinner()
               : Text(
-                  'Place Order • UGX ${MenuItem._fmt(state.cartTotal)}',
+                  'Place Order • ${state.formattedTotal}',
                   style: TextStyle(
                     fontSize: fs(context, 14),
                     fontWeight: FontWeight.w800,
@@ -3303,12 +4170,24 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-class OrderConfirmationScreen extends StatelessWidget {
+class OrderConfirmationScreen extends StatefulWidget {
   const OrderConfirmationScreen({super.key, required this.orderId});
   final String orderId;
 
   @override
+  State<OrderConfirmationScreen> createState() =>
+      _OrderConfirmationScreenState();
+}
+
+class _OrderConfirmationScreenState extends State<OrderConfirmationScreen> {
+  double _rating = 0;
+  bool _showRating = false;
+
+  @override
   Widget build(BuildContext context) {
+    final state = AppScope.of(context);
+    final order = state.orders.where((o) => o.id == widget.orderId).firstOrNull;
+
     return Scaffold(
       backgroundColor: const Color(0xFFFAF8F5),
       body: SafeArea(
@@ -3362,7 +4241,7 @@ class OrderConfirmationScreen extends StatelessWidget {
                   border: Border.all(color: AppColors.line),
                 ),
                 child: Text(
-                  orderId,
+                  widget.orderId,
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: fs(context, 12),
@@ -3379,6 +4258,18 @@ class OrderConfirmationScreen extends StatelessWidget {
                   ),
                 ),
               ),
+              if (order != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Estimated delivery: ${order.estimatedMinutes ?? 25} min',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: fs(context, 13),
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.sage,
+                  ),
+                ),
+              ],
               const SizedBox(height: 40),
               ElevatedButton.icon(
                 onPressed: () {
@@ -3386,7 +4277,7 @@ class OrderConfirmationScreen extends StatelessWidget {
                     MaterialPageRoute(
                       builder: (_) => AppScope(
                         state: AppScope.of(context),
-                        child: OrderTrackingScreen(orderId: orderId),
+                        child: OrderTrackingScreen(orderId: widget.orderId),
                       ),
                     ),
                   );
@@ -3420,6 +4311,33 @@ class OrderConfirmationScreen extends StatelessWidget {
                   ),
                 ),
               ),
+              if (!_showRating)
+                TextButton(
+                  onPressed: () => setState(() => _showRating = true),
+                  child: Text(
+                    'Rate your experience',
+                    style: TextStyle(
+                      color: AppColors.mutedText,
+                      fontSize: fs(context, 12),
+                    ),
+                  ),
+                ),
+              if (_showRating) ...[
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(5, (i) {
+                    return IconButton(
+                      onPressed: () => setState(() => _rating = i + 1.0),
+                      icon: Icon(
+                        i < _rating ? Icons.star : Icons.star_border,
+                        color: Colors.amber,
+                        size: 32,
+                      ),
+                    );
+                  }),
+                ),
+              ],
             ],
           ),
         ),
@@ -3482,6 +4400,17 @@ class OrderTrackingScreen extends StatelessWidget {
           ),
           onPressed: () => Navigator.of(context).pop(),
         ),
+        actions: [
+          if (order != null &&
+              order.status.index <= OrderStatus.confirmed.index)
+            TextButton(
+              onPressed: () => _showCancelDialog(context, state, orderId),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(20),
@@ -3528,6 +4457,15 @@ class OrderTrackingScreen extends StatelessWidget {
                     style: TextStyle(
                       fontSize: fs(context, 11),
                       color: AppColors.sage,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Estimated: ${order.estimatedTime}',
+                    style: TextStyle(
+                      fontSize: fs(context, 11),
+                      color: AppColors.gold,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -3593,14 +4531,117 @@ class OrderTrackingScreen extends StatelessWidget {
               ],
             );
           }),
-          const SizedBox(height: 24),
-          Text(
-            '⚡ Live tracking will be available once your order is confirmed.',
-            style: TextStyle(
-              fontSize: fs(context, 12),
-              color: AppColors.mutedText,
-              height: 1.5,
+          if (order != null && order.status == OrderStatus.delivered) ...[
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF8E1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Rate Your Order',
+                    style: TextStyle(
+                      fontSize: fs(context, 14),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    children: List.generate(5, (i) {
+                      return IconButton(
+                        onPressed: () {
+                          final updatedOrder = state.orders
+                              .where((o) => o.id == orderId)
+                              .firstOrNull;
+                          if (updatedOrder != null) {
+                            updatedOrder.rating = i + 1.0;
+                            state.notifyListeners();
+                          }
+                        },
+                        icon: Icon(
+                          i < (order.rating ?? 0)
+                              ? Icons.star
+                              : Icons.star_border,
+                          color: Colors.amber,
+                          size: 28,
+                        ),
+                      );
+                    }),
+                  ),
+                  if (order.review.isNotEmpty)
+                    Text(
+                      order.review,
+                      style: TextStyle(
+                        fontSize: fs(context, 12),
+                        color: AppColors.grayText,
+                      ),
+                    ),
+                ],
+              ),
             ),
+          ],
+          const SizedBox(height: 24),
+          ElevatedButton.icon(
+            onPressed: () {
+              state.reorder(orderId);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Items added to cart!'),
+                  backgroundColor: AppColors.sage,
+                ),
+              );
+            },
+            icon: const Icon(Icons.repeat, size: 18),
+            label: const Text('Reorder'),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      AppScope(state: state, child: const OrderHistoryScreen()),
+                ),
+              );
+            },
+            icon: const Icon(Icons.history, size: 18),
+            label: const Text('View All Orders'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCancelDialog(BuildContext context, AppState state, String orderId) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cancel Order'),
+        content: const Text('Are you sure you want to cancel this order?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('No'),
+          ),
+          TextButton(
+            onPressed: () {
+              state.cancelOrder(orderId);
+              Navigator.pop(dialogContext);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Order cancelled'),
+                  backgroundColor: AppColors.coral,
+                ),
+              );
+            },
+            style: TextButton.styleFrom(foregroundColor: AppColors.coral),
+            child: const Text('Yes, Cancel'),
           ),
         ],
       ),
@@ -3624,7 +4665,8 @@ class OrderHistoryScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final orders = AppScope.of(context).orders;
+    final state = AppScope.of(context);
+    final orders = state.orders;
 
     return Scaffold(
       appBar: AppBar(
@@ -3686,9 +4728,15 @@ class OrderHistoryScreen extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: order.status == OrderStatus.cancelled
+                          ? Colors.grey.shade50
+                          : Colors.white,
                       borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: AppColors.line),
+                      border: Border.all(
+                        color: order.status == OrderStatus.cancelled
+                            ? Colors.grey.shade300
+                            : AppColors.line,
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3698,7 +4746,9 @@ class OrderHistoryScreen extends StatelessWidget {
                             Icon(
                               order.statusIcon,
                               size: 18,
-                              color: AppColors.sage,
+                              color: order.status == OrderStatus.cancelled
+                                  ? Colors.grey
+                                  : AppColors.sage,
                             ),
                             const SizedBox(width: 8),
                             Text(
@@ -3706,7 +4756,9 @@ class OrderHistoryScreen extends StatelessWidget {
                               style: TextStyle(
                                 fontSize: fs(context, 13),
                                 fontWeight: FontWeight.w700,
-                                color: AppColors.sage,
+                                color: order.status == OrderStatus.cancelled
+                                    ? Colors.grey
+                                    : AppColors.sage,
                               ),
                             ),
                             const Spacer(),
@@ -3728,15 +4780,33 @@ class OrderHistoryScreen extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 4),
-                        Text(
-                          order.deliveryType == 'Takeaway'
-                              ? 'Takeaway'
-                              : 'Delivery',
-                          style: TextStyle(
-                            fontSize: fs(context, 10),
-                            color: AppColors.sage,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        Row(
+                          children: [
+                            Text(
+                              order.deliveryType == 'Takeaway'
+                                  ? 'Takeaway'
+                                  : 'Delivery',
+                              style: TextStyle(
+                                fontSize: fs(context, 10),
+                                color: AppColors.sage,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (order.rating > 0) ...[
+                              const SizedBox(width: 8),
+                              Row(
+                                children: List.generate(5, (j) {
+                                  return Icon(
+                                    j < order.rating
+                                        ? Icons.star
+                                        : Icons.star_border,
+                                    size: 12,
+                                    color: Colors.amber,
+                                  );
+                                }),
+                              ),
+                            ],
+                          ],
                         ),
                         const SizedBox(height: 6),
                         Text(
@@ -3785,15 +4855,7 @@ class OrderHistoryScreen extends StatelessWidget {
                             Expanded(
                               child: ElevatedButton(
                                 onPressed: () {
-                                  final state = AppScope.of(itemContext);
-                                  for (final item in order.items) {
-                                    state.addToCart(
-                                      MenuItem(
-                                        name: item.name,
-                                        price: item.price,
-                                      ),
-                                    );
-                                  }
+                                  AppScope.of(itemContext).reorder(order.id);
                                   ScaffoldMessenger.of(
                                     itemContext,
                                   ).showSnackBar(
@@ -3997,27 +5059,76 @@ class _SearchScreenState extends State<SearchScreen> {
   final TextEditingController _ctrl = TextEditingController();
   List<MenuItem> _results = [];
   bool _searched = false;
+  String? _filter;
+  String? _sortBy;
+  final List<String> _dietaryFilters = ['All', 'Vegetarian', 'Gluten Free'];
+  final List<String> _sortOptions = [
+    'Popularity',
+    'Price: Low to High',
+    'Price: High to Low',
+    'Rating',
+  ];
+  Timer? _debounce;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _debounce?.cancel();
+    super.dispose();
+  }
 
   void _search(String query) {
-    final q = query.toLowerCase().trim();
-    if (q.isEmpty) {
-      setState(() {
-        _results = [];
-        _searched = false;
-      });
-      return;
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      final q = query.toLowerCase().trim();
+      if (q.isEmpty) {
+        setState(() {
+          _results = [];
+          _searched = false;
+        });
+        return;
+      }
+      AppScope.of(context).addSearchHistory(q);
+      var matches = allMenuItems
+          .where((item) => item.name.toLowerCase().contains(q))
+          .toList();
+      _applyFilters(matches);
+    });
+  }
+
+  void _applyFilters(List<MenuItem> matches) {
+    if (_filter != null && _filter != 'All') {
+      if (_filter == 'Vegetarian') {
+        matches = matches.where((item) => item.isVegetarian).toList();
+      } else if (_filter == 'Gluten Free') {
+        matches = matches.where((item) => item.isGlutenFree).toList();
+      }
     }
-    final matches = allMenuItems
-        .where((item) => item.name.toLowerCase().contains(q))
-        .toList();
+    if (_sortBy == 'Popularity') {
+      matches.sort((a, b) => b.reviewCount.compareTo(a.reviewCount));
+    } else if (_sortBy == 'Price: Low to High') {
+      matches.sort((a, b) => a.price.compareTo(b.price));
+    } else if (_sortBy == 'Price: High to Low') {
+      matches.sort((a, b) => b.price.compareTo(a.price));
+    } else if (_sortBy == 'Rating') {
+      matches.sort((a, b) => b.rating.compareTo(a.rating));
+    }
     setState(() {
       _results = matches;
       _searched = true;
     });
   }
 
+  void _clearSearch() {
+    _ctrl.clear();
+    _searched = false;
+    _results = [];
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
+    final state = AppScope.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('SEARCH MENU'),
@@ -4050,14 +5161,158 @@ class _SearchScreenState extends State<SearchScreen> {
                         size: 18,
                         color: AppColors.mutedText,
                       ),
-                      onPressed: () {
-                        _ctrl.clear();
-                        _search('');
-                      },
+                      onPressed: _clearSearch,
                     )
                   : null,
             ),
           ),
+          if (state.searchHistory.isNotEmpty && !_searched)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Recent Searches',
+                        style: TextStyle(
+                          fontSize: fs(context, 12),
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: state.clearSearchHistory,
+                        child: Text(
+                          'Clear',
+                          style: TextStyle(
+                            fontSize: fs(context, 11),
+                            color: AppColors.coral,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: state.searchHistory.map((query) {
+                      return GestureDetector(
+                        onTap: () {
+                          _ctrl.text = query;
+                          _search(query);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: AppColors.line),
+                          ),
+                          child: Text(
+                            query,
+                            style: TextStyle(
+                              fontSize: fs(context, 12),
+                              color: AppColors.textDark,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+              ),
+            ),
+          if (_searched)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    ..._dietaryFilters.map((filter) {
+                      final selected =
+                          _filter == filter ||
+                          (filter == 'All' && _filter == null);
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _filter = filter == 'All' ? null : filter;
+                              _search(_ctrl.text);
+                            });
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: selected
+                                  ? AppColors.sage
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: selected
+                                    ? AppColors.sage
+                                    : AppColors.line,
+                              ),
+                            ),
+                            child: Text(
+                              filter,
+                              style: TextStyle(
+                                fontSize: fs(context, 11),
+                                fontWeight: FontWeight.w600,
+                                color: selected
+                                    ? Colors.white
+                                    : AppColors.mutedText,
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: DropdownButton<String>(
+                        hint: Text(
+                          'Sort',
+                          style: TextStyle(
+                            fontSize: fs(context, 11),
+                            color: AppColors.mutedText,
+                          ),
+                        ),
+                        value: _sortBy,
+                        items: _sortOptions.map((option) {
+                          return DropdownMenuItem(
+                            value: option,
+                            child: Text(
+                              option,
+                              style: TextStyle(fontSize: fs(context, 11)),
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (value) {
+                          setState(() {
+                            _sortBy = value;
+                            _search(_ctrl.text);
+                          });
+                        },
+                        underline: const SizedBox(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           if (!_searched)
             Expanded(
               child: Center(
@@ -4138,7 +5393,17 @@ class _SearchResultTile extends StatelessWidget {
               width: 60,
               height: 60,
               child: item.imagePath != null
-                  ? Image.asset(item.imagePath!, fit: BoxFit.cover)
+                  ? Image.asset(
+                      item.imagePath!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        color: AppColors.placeholder,
+                        child: Icon(
+                          Icons.broken_image,
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                    )
                   : Container(
                       color: AppColors.placeholder,
                       child: Icon(
@@ -4156,46 +5421,93 @@ class _SearchResultTile extends StatelessWidget {
               children: [
                 Text(
                   item.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: fs(context, 13),
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  item.note == 'from'
-                      ? 'from ${item.priceFormatted}'
-                      : item.priceFormatted,
-                  style: TextStyle(
-                    fontSize: fs(context, 12),
-                    color: AppColors.sage,
-                    fontWeight: FontWeight.w700,
-                  ),
+                Row(
+                  children: [
+                    Text(
+                      item.note == 'from'
+                          ? 'from ${item.priceFormatted}'
+                          : item.priceFormatted,
+                      style: TextStyle(
+                        fontSize: fs(context, 12),
+                        color: AppColors.sage,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (item.rating > 0) ...[
+                      const SizedBox(width: 8),
+                      Icon(Icons.star, size: 12, color: Colors.amber),
+                      Text(
+                        '${item.rating}',
+                        style: TextStyle(
+                          fontSize: fs(context, 11),
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
+                if (item.tags.isNotEmpty)
+                  Wrap(
+                    spacing: 4,
+                    children: item.tags.take(2).map((tag) {
+                      return Text(
+                        '#$tag',
+                        style: TextStyle(
+                          fontSize: fs(context, 9),
+                          color: AppColors.mutedText,
+                        ),
+                      );
+                    }).toList(),
+                  ),
               ],
             ),
           ),
-          GestureDetector(
-            onTap: () {
-              state.addToCart(item);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('${item.name} added to cart'),
-                  duration: const Duration(seconds: 1),
-                  backgroundColor: AppColors.sage,
+          if (item.available)
+            GestureDetector(
+              onTap: () {
+                state.addToCart(item);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('${item.name} added to cart'),
+                    duration: const Duration(seconds: 1),
+                    backgroundColor: AppColors.sage,
+                  ),
+                );
+              },
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: AppColors.sage,
+                  borderRadius: BorderRadius.circular(8),
                 ),
-              );
-            },
-            child: Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: AppColors.sage,
-                borderRadius: BorderRadius.circular(8),
+                child: const Icon(Icons.add, color: Colors.white, size: 18),
               ),
-              child: const Icon(Icons.add, color: Colors.white, size: 18),
+            )
+          else
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.coral.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                'Out of Stock',
+                style: TextStyle(
+                  fontSize: fs(context, 9),
+                  color: AppColors.coral,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -4630,44 +5942,38 @@ class _SendGiftTabState extends State<_SendGiftTab> {
         ),
         const SizedBox(height: 10),
         Row(
-          children: _amounts
-              .map(
-                (amt) => Expanded(
-                  child: GestureDetector(
-                    onTap: () => setState(() => _selected = amt),
-                    child: Container(
-                      margin: EdgeInsets.only(
-                        right: amt != _amounts.last ? 8 : 0,
-                      ),
-                      height: 40,
-                      decoration: BoxDecoration(
+          children: _amounts.map((amt) {
+            return Expanded(
+              child: GestureDetector(
+                onTap: () => setState(() => _selected = amt),
+                child: Container(
+                  margin: EdgeInsets.only(right: amt != _amounts.last ? 8 : 0),
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _selected == amt
+                        ? AppColors.sage
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: _selected == amt ? AppColors.sage : AppColors.line,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      '${(amt / 1000).toInt()}K',
+                      style: TextStyle(
+                        fontSize: fs(context, 12),
+                        fontWeight: FontWeight.w700,
                         color: _selected == amt
-                            ? AppColors.sage
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: _selected == amt
-                              ? AppColors.sage
-                              : AppColors.line,
-                        ),
-                      ),
-                      child: Center(
-                        child: Text(
-                          '${(amt / 1000).toInt()}K',
-                          style: TextStyle(
-                            fontSize: fs(context, 12),
-                            fontWeight: FontWeight.w700,
-                            color: _selected == amt
-                                ? Colors.white
-                                : AppColors.mutedText,
-                          ),
-                        ),
+                            ? Colors.white
+                            : AppColors.mutedText,
                       ),
                     ),
                   ),
                 ),
-              )
-              .toList(),
+              ),
+            );
+          }).toList(),
         ),
         const SizedBox(height: 16),
         _InputField(
@@ -4796,9 +6102,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _orderNotifs = true;
   bool _promoNotifs = true;
   bool _emailUpdates = false;
+  bool _biometricAuth = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  void _loadSettings() {
+    final state = AppScope.of(context);
+    _biometricAuth = state.isBiometricEnabled;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final state = AppScope.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('SETTINGS'),
@@ -4814,6 +6133,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
         children: [
+          _SettingsSection(
+            title: 'PREFERENCES',
+            children: [
+              _SwitchRow(
+                label: 'Dark Mode',
+                value: state.darkMode,
+                onChanged: (v) => state.toggleDarkMode(),
+              ),
+              _NavRow(
+                label: 'Language',
+                trailing: Text(
+                  state.selectedLanguage,
+                  style: TextStyle(
+                    fontSize: fs(context, 12),
+                    color: AppColors.mutedText,
+                  ),
+                ),
+                onTap: () => _showLanguageDialog(context, state),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
           _SettingsSection(
             title: 'NOTIFICATIONS',
             children: [
@@ -4836,9 +6177,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 16),
           _SettingsSection(
+            title: 'SECURITY',
+            children: [
+              _NavRow(
+                label: 'Change Password',
+                onTap: () => _showChangePasswordDialog(context),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _SettingsSection(
             title: 'ACCOUNT',
             children: [
-              _NavRow(label: 'Change Password', onTap: () {}),
               _NavRow(
                 label: 'Manage Addresses',
                 onTap: () => Navigator.of(context).push(
@@ -4851,6 +6201,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               _NavRow(label: 'Payment Methods', onTap: () {}),
+              _NavRow(
+                label: 'Clear Cache',
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Cache cleared!'),
+                      backgroundColor: AppColors.sage,
+                    ),
+                  );
+                },
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -4900,7 +6261,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 20),
           Center(
             child: Text(
-              'Oweitu Cafe App v1.3.3\nBuilt with ❤️ in Uganda',
+              'Oweitu Cafe App v1.3.3\n© 2026 Oweitu Cafe. All rights reserved.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: fs(context, 11),
@@ -4908,6 +6269,138 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 height: 1.6,
               ),
             ),
+          ),
+          const SizedBox(height: 12),
+          Center(
+            child: TextButton(
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (dialogContext) => AlertDialog(
+                    title: const Text('Sign Out'),
+                    content: const Text('Are you sure you want to sign out?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          state.signOut();
+                          Navigator.pop(dialogContext);
+                          Navigator.pushAndRemoveUntil(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const LoginScreen(),
+                            ),
+                            (route) => false,
+                          );
+                        },
+                        style: TextButton.styleFrom(
+                          foregroundColor: AppColors.coral,
+                        ),
+                        child: const Text('Sign Out'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+              child: Text(
+                'Sign Out',
+                style: TextStyle(
+                  color: AppColors.coral,
+                  fontWeight: FontWeight.w700,
+                  fontSize: fs(context, 14),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLanguageDialog(BuildContext context, AppState state) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Select Language'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: ['English', 'Swahili', 'Luganda'].map((lang) {
+            return ListTile(
+              title: Text(lang),
+              trailing: state.selectedLanguage == lang
+                  ? Icon(Icons.check, color: AppColors.sage)
+                  : null,
+              onTap: () {
+                state.setLanguage(lang);
+                Navigator.pop(dialogContext);
+              },
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  void _showChangePasswordDialog(BuildContext context) {
+    final currentCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Change Password'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _InputField(
+              hint: 'Current Password',
+              controller: currentCtrl,
+              obscure: true,
+            ),
+            const SizedBox(height: 8),
+            _InputField(
+              hint: 'New Password',
+              controller: newCtrl,
+              obscure: true,
+            ),
+            const SizedBox(height: 8),
+            _InputField(
+              hint: 'Confirm Password',
+              controller: confirmCtrl,
+              obscure: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (newCtrl.text == confirmCtrl.text &&
+                  newCtrl.text.length >= 6) {
+                Navigator.pop(dialogContext);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Password updated successfully!'),
+                    backgroundColor: AppColors.sage,
+                  ),
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Passwords do not match or are too short'),
+                    backgroundColor: AppColors.coral,
+                  ),
+                );
+              }
+            },
+            child: const Text('Update'),
           ),
         ],
       ),
@@ -4991,9 +6484,10 @@ class _SwitchRow extends StatelessWidget {
 }
 
 class _NavRow extends StatelessWidget {
-  const _NavRow({required this.label, this.onTap});
+  const _NavRow({required this.label, this.onTap, this.trailing});
   final String label;
   final VoidCallback? onTap;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -5016,6 +6510,7 @@ class _NavRow extends StatelessWidget {
                 ),
               ),
             ),
+            if (trailing != null) ...[trailing!, const SizedBox(width: 4)],
             const Icon(
               Icons.chevron_right,
               color: AppColors.mutedText,
@@ -5415,7 +6910,18 @@ class GalleryScreen extends StatelessWidget {
           onTap: () => _showFullscreen(context, i),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(6),
-            child: Image.asset(_imagePaths[i], fit: BoxFit.cover),
+            child: Image.asset(
+              _imagePaths[i],
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) => Container(
+                color: AppColors.placeholder,
+                child: Icon(
+                  Icons.broken_image,
+                  size: 40,
+                  color: AppColors.mutedText,
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -5438,7 +6944,16 @@ class GalleryScreen extends StatelessWidget {
             controller: PageController(initialPage: initialIndex),
             itemCount: _imagePaths.length,
             itemBuilder: (_, i) => InteractiveViewer(
-              child: Center(child: Image.asset(_imagePaths[i])),
+              child: Center(
+                child: Image.asset(
+                  _imagePaths[i],
+                  errorBuilder: (context, error, stackTrace) => const Icon(
+                    Icons.broken_image,
+                    color: Colors.white54,
+                    size: 80,
+                  ),
+                ),
+              ),
             ),
           ),
         ),
@@ -5570,7 +7085,18 @@ class _MenuItemDetailSheetState extends State<MenuItemDetailSheet> {
               height: 200,
               width: double.infinity,
               child: widget.item.imagePath != null
-                  ? Image.asset(widget.item.imagePath!, fit: BoxFit.cover)
+                  ? Image.asset(
+                      widget.item.imagePath!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        color: AppColors.placeholder,
+                        child: Icon(
+                          Icons.broken_image,
+                          size: 40,
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                    )
                   : Container(
                       color: AppColors.placeholder,
                       child: Icon(
@@ -5622,6 +7148,30 @@ class _MenuItemDetailSheetState extends State<MenuItemDetailSheet> {
                     color: AppColors.sage,
                   ),
                 ),
+                if (widget.item.rating > 0) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      ...List.generate(5, (i) {
+                        return Icon(
+                          i < widget.item.rating
+                              ? Icons.star
+                              : Icons.star_border,
+                          size: 14,
+                          color: Colors.amber,
+                        );
+                      }),
+                      const SizedBox(width: 4),
+                      Text(
+                        '(${widget.item.reviewCount} reviews)',
+                        style: TextStyle(
+                          fontSize: fs(context, 11),
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 if (widget.item.description != null) ...[
                   const SizedBox(height: 8),
                   Text(
@@ -5631,6 +7181,51 @@ class _MenuItemDetailSheetState extends State<MenuItemDetailSheet> {
                       color: AppColors.grayText,
                       height: 1.5,
                     ),
+                  ),
+                ],
+                if (widget.item.tags.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    children: widget.item.tags.map((tag) {
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.sage.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '#$tag',
+                          style: TextStyle(
+                            fontSize: fs(context, 10),
+                            color: AppColors.sage,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+                if (widget.item.prepTimeMinutes != null) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.timer_outlined,
+                        size: 14,
+                        color: AppColors.mutedText,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${widget.item.prepTimeMinutes} min prep time',
+                        style: TextStyle(
+                          fontSize: fs(context, 11),
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
                 const SizedBox(height: 14),
@@ -5728,287 +7323,344 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final orders = AppScope.of(context).orders;
+    final state = AppScope.of(context);
+    final orders = state.orders;
     final sw = MediaQuery.of(context).size.width;
 
-    return ListView(
-      children: [
-        SizedBox(
-          height: sw * 0.6,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              Image.asset('assets/images/Hero.jpg', fit: BoxFit.cover),
-              Container(color: Colors.black.withValues(alpha: 0.3)),
-              Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'WELCOME TO',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: fs(context, 11),
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.14,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Oweitu Cafe',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: fs(context, 40),
-                        height: 1.05,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Café & Restaurant',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: fs(context, 12),
-                        letterSpacing: 0.06,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.coral,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 12,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(50),
-                        ),
-                        minimumSize: Size.zero,
-                        textStyle: TextStyle(
-                          fontSize: fs(context, 13),
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.04,
-                        ),
-                      ),
-                      onPressed: onStartOrder,
-                      icon: const Icon(Icons.restaurant_menu, size: 18),
-                      label: const Text('View Menu'),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-          child: GestureDetector(
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => AppScope(
-                  state: AppScope.of(context),
-                  child: const SearchScreen(),
-                ),
-              ),
-            ),
-            child: Container(
-              height: 44,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.line),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 14),
+    return RefreshIndicator(
+      onRefresh: () async {
+        await Future.delayed(const Duration(seconds: 1));
+      },
+      child: ListView(
+        children: [
+          if (state.isOffline)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: AppColors.coral,
               child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.search, size: 20, color: AppColors.mutedText),
+                  const Icon(Icons.wifi_off, color: Colors.white, size: 16),
                   const SizedBox(width: 8),
                   Text(
-                    'Search menu…',
+                    'You are offline. Some features may be limited.',
                     style: TextStyle(
-                      fontSize: fs(context, 13),
-                      color: AppColors.mutedText,
+                      color: Colors.white,
+                      fontSize: fs(context, 11),
                     ),
                   ),
                 ],
               ),
             ),
-          ),
-        ),
-        const SizedBox(height: 20),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Text(
-            'POPULAR PICKS',
-            style: TextStyle(
-              fontSize: fs(context, 11),
-              fontWeight: FontWeight.w700,
-              color: AppColors.mutedText,
-              letterSpacing: 0.1,
+          SizedBox(
+            height: sw * 0.6,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Image.asset('assets/images/Hero.jpg', fit: BoxFit.cover),
+                Container(color: Colors.black.withValues(alpha: 0.3)),
+                Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'WELCOME TO',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: fs(context, 11),
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.14,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Oweitu Cafe',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: fs(context, 40),
+                          height: 1.05,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Café & Restaurant',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: fs(context, 12),
+                          letterSpacing: 0.06,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.coral,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(50),
+                          ),
+                          minimumSize: Size.zero,
+                          textStyle: TextStyle(
+                            fontSize: fs(context, 13),
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.04,
+                          ),
+                        ),
+                        onPressed: onStartOrder,
+                        icon: const Icon(Icons.restaurant_menu, size: 18),
+                        label: const Text('View Menu'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 100,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            children: const [
-              _QuickPickChip(
-                label: 'Chips & Chicken',
-                price: 'UGX 17,000',
-                icon: Icons.lunch_dining,
-              ),
-              _QuickPickChip(
-                label: 'Chicken Tikka Pizza',
-                price: 'from UGX 25,000',
-                icon: Icons.local_pizza,
-              ),
-              _QuickPickChip(
-                label: 'African Tea',
-                price: 'UGX 4,000',
-                icon: Icons.local_cafe,
-              ),
-              _QuickPickChip(
-                label: 'Chicken Burger',
-                price: 'UGX 13,000',
-                icon: Icons.lunch_dining_outlined,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'FIND US',
-                style: TextStyle(
-                  fontSize: fs(context, 11),
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.mutedText,
-                  letterSpacing: 0.1,
-                ),
-              ),
-              const SizedBox(height: 10),
-              ElevatedButton.icon(
-                onPressed: () {},
-                icon: const Icon(Icons.public, size: 16),
-                label: const Text('View Oweitu Cafe Branches'),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'RECENT ORDERS',
-                style: TextStyle(
-                  fontSize: fs(context, 11),
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.mutedText,
-                  letterSpacing: 0.1,
-                ),
-              ),
-              const SizedBox(height: 10),
-              if (orders.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppColors.line),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => AppScope(
+                    state: AppScope.of(context),
+                    child: const SearchScreen(),
                   ),
-                  child: Text(
-                    'No orders placed recently',
-                    style: TextStyle(
-                      fontSize: fs(context, 13),
-                      color: AppColors.mutedText,
-                      fontStyle: FontStyle.italic,
+                ),
+              ),
+              child: Container(
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.line),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Row(
+                  children: [
+                    Icon(Icons.search, size: 20, color: AppColors.mutedText),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Search menu…',
+                      style: TextStyle(
+                        fontSize: fs(context, 13),
+                        color: AppColors.mutedText,
+                      ),
                     ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              'POPULAR PICKS',
+              style: TextStyle(
+                fontSize: fs(context, 11),
+                fontWeight: FontWeight.w700,
+                color: AppColors.mutedText,
+                letterSpacing: 0.1,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 100,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              children: const [
+                _QuickPickChip(
+                  label: 'Chips & Chicken',
+                  price: 'UGX 17,000',
+                  icon: Icons.lunch_dining,
+                ),
+                _QuickPickChip(
+                  label: 'Chicken Tikka Pizza',
+                  price: 'from UGX 25,000',
+                  icon: Icons.local_pizza,
+                ),
+                _QuickPickChip(
+                  label: 'African Tea',
+                  price: 'UGX 4,000',
+                  icon: Icons.local_cafe,
+                ),
+                _QuickPickChip(
+                  label: 'Chicken Burger',
+                  price: 'UGX 13,000',
+                  icon: Icons.lunch_dining_outlined,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'FIND US',
+                  style: TextStyle(
+                    fontSize: fs(context, 11),
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.mutedText,
+                    letterSpacing: 0.1,
                   ),
-                )
-              else
-                Column(
-                  children: orders
-                      .take(2)
-                      .map(
-                        (order) => Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: GestureDetector(
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => AppScope(
-                                  state: AppScope.of(context),
-                                  child: OrderTrackingScreen(orderId: order.id),
-                                ),
-                              ),
-                            ),
-                            child: Container(
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(color: AppColors.line),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    order.statusIcon,
-                                    size: 20,
-                                    color: AppColors.sage,
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          order.statusLabel,
-                                          style: TextStyle(
-                                            fontSize: fs(context, 13),
-                                            fontWeight: FontWeight.w700,
-                                            color: AppColors.sage,
-                                          ),
-                                        ),
-                                        Text(
-                                          '${order.items.length} items • UGX ${MenuItem._fmt(order.total)}',
-                                          style: TextStyle(
-                                            fontSize: fs(context, 11),
-                                            color: AppColors.mutedText,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const Icon(
-                                    Icons.chevron_right,
-                                    size: 16,
-                                    color: AppColors.mutedText,
-                                  ),
-                                ],
-                              ),
+                ),
+                const SizedBox(height: 10),
+                ElevatedButton.icon(
+                  onPressed: () {},
+                  icon: const Icon(Icons.public, size: 16),
+                  label: const Text('View Oweitu Cafe Branches'),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'RECENT ORDERS',
+                      style: TextStyle(
+                        fontSize: fs(context, 11),
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.mutedText,
+                        letterSpacing: 0.1,
+                      ),
+                    ),
+                    if (orders.isNotEmpty)
+                      TextButton(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => AppScope(
+                              state: AppScope.of(context),
+                              child: const OrderHistoryScreen(),
                             ),
                           ),
                         ),
-                      )
-                      .toList(),
+                        child: Text(
+                          'View All',
+                          style: TextStyle(
+                            fontSize: fs(context, 11),
+                            color: AppColors.sage,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-            ],
+                const SizedBox(height: 10),
+                if (orders.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppColors.line),
+                    ),
+                    child: Text(
+                      'No orders placed recently',
+                      style: TextStyle(
+                        fontSize: fs(context, 13),
+                        color: AppColors.mutedText,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  )
+                else
+                  Column(
+                    children: orders.take(2).map((order) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: GestureDetector(
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => AppScope(
+                                state: AppScope.of(context),
+                                child: OrderTrackingScreen(orderId: order.id),
+                              ),
+                            ),
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: order.status == OrderStatus.cancelled
+                                  ? Colors.grey.shade50
+                                  : Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: order.status == OrderStatus.cancelled
+                                    ? Colors.grey.shade300
+                                    : AppColors.line,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  order.statusIcon,
+                                  size: 20,
+                                  color: order.status == OrderStatus.cancelled
+                                      ? Colors.grey
+                                      : AppColors.sage,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        order.statusLabel,
+                                        style: TextStyle(
+                                          fontSize: fs(context, 13),
+                                          fontWeight: FontWeight.w700,
+                                          color:
+                                              order.status ==
+                                                  OrderStatus.cancelled
+                                              ? Colors.grey
+                                              : AppColors.sage,
+                                        ),
+                                      ),
+                                      Text(
+                                        '${order.items.length} items • UGX ${MenuItem._fmt(order.total)}',
+                                        style: TextStyle(
+                                          fontSize: fs(context, 11),
+                                          color: AppColors.mutedText,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const Icon(
+                                  Icons.chevron_right,
+                                  size: 16,
+                                  color: AppColors.mutedText,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 24),
-      ],
+          const SizedBox(height: 24),
+        ],
+      ),
     );
   }
 }
@@ -6206,7 +7858,18 @@ class _MenuCategoryCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    Image.asset(category.imagePath, fit: BoxFit.cover),
+                    Image.asset(
+                      category.imagePath,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        color: AppColors.placeholder,
+                        child: Icon(
+                          Icons.broken_image,
+                          size: 40,
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                    ),
                     Positioned(
                       bottom: 0,
                       left: 0,
@@ -6439,7 +8102,19 @@ class _MenuItemGridCard extends StatelessWidget {
                               ),
                             ),
                           )
-                        : Image.asset(item.imagePath!, fit: BoxFit.cover),
+                        : Image.asset(
+                            item.imagePath!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) =>
+                                Container(
+                                  color: AppColors.placeholder,
+                                  child: Icon(
+                                    Icons.broken_image,
+                                    size: 40,
+                                    color: AppColors.mutedText,
+                                  ),
+                                ),
+                          ),
                     Positioned(
                       top: 6,
                       right: 6,
@@ -6462,6 +8137,48 @@ class _MenuItemGridCard extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (item.isPopular)
+                      Positioned(
+                        top: 6,
+                        left: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.coral,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            'POPULAR',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: fs(context, 8),
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (!item.available)
+                      Positioned(
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          color: Colors.black.withValues(alpha: 0.7),
+                          child: Text(
+                            'OUT OF STOCK',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: fs(context, 10),
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -6488,13 +8205,28 @@ class _MenuItemGridCard extends StatelessWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          item.priceFormatted,
-                          style: TextStyle(
-                            fontSize: fs(context, 12),
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.navy,
-                          ),
+                        Row(
+                          children: [
+                            Text(
+                              item.priceFormatted,
+                              style: TextStyle(
+                                fontSize: fs(context, 12),
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.navy,
+                              ),
+                            ),
+                            if (item.rating > 0) ...[
+                              const SizedBox(width: 6),
+                              Icon(Icons.star, size: 10, color: Colors.amber),
+                              Text(
+                                '${item.rating}',
+                                style: TextStyle(
+                                  fontSize: fs(context, 10),
+                                  color: AppColors.mutedText,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                         const SizedBox(height: 6),
                         SizedBox(
@@ -6502,8 +8234,12 @@ class _MenuItemGridCard extends StatelessWidget {
                           height: 30,
                           child: ElevatedButton(
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.sage,
-                              foregroundColor: Colors.white,
+                              backgroundColor: item.available
+                                  ? AppColors.sage
+                                  : AppColors.placeholder,
+                              foregroundColor: item.available
+                                  ? Colors.white
+                                  : AppColors.mutedText,
                               padding: EdgeInsets.zero,
                               minimumSize: Size.zero,
                               shape: RoundedRectangleBorder(
@@ -6515,8 +8251,12 @@ class _MenuItemGridCard extends StatelessWidget {
                                 letterSpacing: 0.05,
                               ),
                             ),
-                            onPressed: () => state.addToCart(item),
-                            child: const Text('ORDER'),
+                            onPressed: item.available
+                                ? () => state.addToCart(item)
+                                : null,
+                            child: Text(
+                              item.available ? 'ORDER' : 'UNAVAILABLE',
+                            ),
                           ),
                         ),
                       ],
@@ -6603,7 +8343,19 @@ class _PizzaItemsBodyState extends State<_PizzaItemsBody> {
                                 ),
                               ),
                             )
-                          : Image.asset(pizza.imagePath!, fit: BoxFit.cover),
+                          : Image.asset(
+                              pizza.imagePath!,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) =>
+                                  Container(
+                                    color: AppColors.placeholder,
+                                    child: Icon(
+                                      Icons.broken_image,
+                                      size: 40,
+                                      color: AppColors.mutedText,
+                                    ),
+                                  ),
+                            ),
                       Positioned(
                         top: 6,
                         right: 6,
@@ -6626,6 +8378,29 @@ class _PizzaItemsBodyState extends State<_PizzaItemsBody> {
                           ),
                         ),
                       ),
+                      if (pizza.isPopular)
+                        Positioned(
+                          top: 6,
+                          left: 6,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.coral,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'POPULAR',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: fs(context, 8),
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -6744,14 +8519,15 @@ class RewardsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final state = AppScope.of(context);
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-      children: const [
-        RewardsBanner(),
-        SizedBox(height: 14),
-        PointsCard(),
-        SizedBox(height: 14),
-        HowItWorks(),
+      children: [
+        const RewardsBanner(),
+        const SizedBox(height: 14),
+        PointsCard(points: state.loyaltyPoints),
+        const SizedBox(height: 14),
+        const HowItWorks(),
       ],
     );
   }
@@ -6801,10 +8577,12 @@ class RewardsBanner extends StatelessWidget {
 }
 
 class PointsCard extends StatelessWidget {
-  const PointsCard({super.key});
+  const PointsCard({super.key, this.points = 80});
+  final int points;
 
   @override
   Widget build(BuildContext context) {
+    final progress = points / 1000;
     return Container(
       decoration: BoxDecoration(
         color: AppColors.navy,
@@ -6830,7 +8608,7 @@ class PointsCard extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Text(
-            '80 pts',
+            '${points} pts',
             style: TextStyle(
               color: Colors.white,
               fontSize: fs(context, 32),
@@ -6844,8 +8622,8 @@ class PointsCard extends StatelessWidget {
           const SizedBox(height: 12),
           ClipRRect(
             borderRadius: BorderRadius.circular(50),
-            child: const LinearProgressIndicator(
-              value: 0.08,
+            child: LinearProgressIndicator(
+              value: progress.clamp(0.0, 1.0),
               minHeight: 7,
               color: Colors.white,
               backgroundColor: Colors.white24,
@@ -7074,8 +8852,39 @@ class _MoreRow extends StatelessWidget {
   }
 }
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  bool _isEditing = false;
+  final TextEditingController _nameCtrl = TextEditingController();
+  final TextEditingController _emailCtrl = TextEditingController();
+  final TextEditingController _phoneCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  void _loadProfile() {
+    final state = AppScope.of(context);
+    _nameCtrl.text = state.profileName;
+    _emailCtrl.text = state.profileEmail;
+    _phoneCtrl.text = state.profilePhone;
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _emailCtrl.dispose();
+    _phoneCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -7091,49 +8900,124 @@ class ProfileScreen extends StatelessWidget {
           ),
           onPressed: () => Navigator.of(context).pop(),
         ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              setState(() => _isEditing = !_isEditing);
+              if (!_isEditing) _loadProfile();
+            },
+            child: Text(
+              _isEditing ? 'Cancel' : 'Edit',
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(24, 32, 24, 32),
           children: [
-            const ProfileAvatar(size: 110),
-            const SizedBox(height: 16),
-            Center(
-              child: Text(
-                state.profileName,
-                style: TextStyle(
-                  fontSize: fs(context, 20),
-                  fontWeight: FontWeight.w900,
-                ),
+            GestureDetector(
+              onTap: () {
+                if (_isEditing) {
+                  // Show image picker
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Image picker would open here'),
+                      backgroundColor: AppColors.sage,
+                    ),
+                  );
+                }
+              },
+              child: Stack(
+                alignment: Alignment.bottomRight,
+                children: [
+                  ProfileAvatar(size: 110, imagePath: state.profileImagePath),
+                  if (_isEditing)
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: AppColors.sage,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.camera_alt,
+                        size: 18,
+                        color: Colors.white,
+                      ),
+                    ),
+                ],
               ),
             ),
-            const SizedBox(height: 32),
-            ProfileLine(icon: Icons.mail_outline, text: state.profileEmail),
-            const SizedBox(height: 20),
-            ProfileLine(icon: Icons.phone_android, text: state.profilePhone),
-            const SizedBox(height: 36),
-            Center(
-              child: Text.rich(
-                TextSpan(
-                  text: 'Want to ',
+            const SizedBox(height: 16),
+            if (_isEditing) ...[
+              _InputField(hint: 'Full Name', controller: _nameCtrl),
+              const SizedBox(height: 10),
+              _InputField(
+                hint: 'Email',
+                controller: _emailCtrl,
+                keyboardType: TextInputType.emailAddress,
+              ),
+              const SizedBox(height: 10),
+              _InputField(
+                hint: 'Phone',
+                controller: _phoneCtrl,
+                keyboardType: TextInputType.phone,
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () {
+                  state.updateProfile(
+                    name: _nameCtrl.text.trim(),
+                    email: _emailCtrl.text.trim(),
+                    phone: _phoneCtrl.text.trim(),
+                  );
+                  setState(() => _isEditing = false);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Profile updated!'),
+                      backgroundColor: AppColors.sage,
+                    ),
+                  );
+                },
+                child: const Text('Save Changes'),
+              ),
+            ] else ...[
+              Center(
+                child: Text(
+                  state.profileName,
+                  style: TextStyle(
+                    fontSize: fs(context, 20),
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 32),
+              ProfileLine(icon: Icons.mail_outline, text: state.profileEmail),
+              const SizedBox(height: 20),
+              ProfileLine(icon: Icons.phone_android, text: state.profilePhone),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F5F5),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
                   children: [
-                    const TextSpan(
-                      text: 'change your password?',
-                      style: TextStyle(fontWeight: FontWeight.w800),
+                    Icon(Icons.emoji_events, color: AppColors.gold, size: 20),
+                    const SizedBox(width: 10),
+                    Text(
+                      '${state.loyaltyPoints} Loyalty Points',
+                      style: TextStyle(
+                        fontSize: fs(context, 13),
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ],
                 ),
-                style: TextStyle(fontSize: fs(context, 14)),
               ),
-            ),
-            const SizedBox(height: 28),
-            ElevatedButton(onPressed: () {}, child: const Text('Edit Profile')),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.coral),
-              onPressed: () {},
-              child: const Text('Delete Account'),
-            ),
+            ],
           ],
         ),
       ),
@@ -7146,6 +9030,7 @@ class AppDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final state = AppScope.of(context);
     return Drawer(
       width: MediaQuery.of(context).size.width * 0.80,
       backgroundColor: Colors.white,
@@ -7164,18 +9049,25 @@ class AppDrawer extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            const ProfileAvatar(size: 80),
+            GestureDetector(
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                );
+              },
+              child: ProfileAvatar(size: 80, imagePath: state.profileImagePath),
+            ),
             const SizedBox(height: 12),
             Text(
-              'AIJUKA JOSHUA',
+              state.profileName,
               style: TextStyle(
                 fontSize: fs(context, 15),
                 fontWeight: FontWeight.w900,
               ),
             ),
-            const SizedBox(height: 4),
             Text(
-              'joshuaaijuka10@gmail.com',
+              state.profileEmail,
               style: TextStyle(
                 fontSize: fs(context, 12),
                 color: AppColors.mutedText,
@@ -7283,7 +9175,36 @@ class AppDrawer extends StatelessWidget {
               text: 'Sign out',
               onTap: () {
                 Navigator.of(context).pop();
-                AppScope.of(context).signOut();
+                showDialog(
+                  context: context,
+                  builder: (dialogContext) => AlertDialog(
+                    title: const Text('Sign Out'),
+                    content: const Text('Are you sure you want to sign out?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          state.signOut();
+                          Navigator.pop(dialogContext);
+                          Navigator.pushAndRemoveUntil(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const LoginScreen(),
+                            ),
+                            (route) => false,
+                          );
+                        },
+                        style: TextButton.styleFrom(
+                          foregroundColor: AppColors.coral,
+                        ),
+                        child: const Text('Sign Out'),
+                      ),
+                    ],
+                  ),
+                );
               },
             ),
             const Spacer(),
@@ -7460,8 +9381,9 @@ class ImagePlaceholder extends StatelessWidget {
 }
 
 class ProfileAvatar extends StatelessWidget {
-  const ProfileAvatar({super.key, required this.size});
+  const ProfileAvatar({super.key, required this.size, this.imagePath});
   final double size;
+  final String? imagePath;
 
   @override
   Widget build(BuildContext context) {
@@ -7474,11 +9396,23 @@ class ProfileAvatar extends StatelessWidget {
             shape: BoxShape.circle,
             border: Border.all(color: AppColors.sage, width: size * 0.04),
           ),
-          child: Icon(
-            Icons.person_outline,
-            size: size * 0.50,
-            color: Colors.black87,
-          ),
+          child: imagePath != null
+              ? ClipOval(
+                  child: Image.asset(
+                    imagePath!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => Icon(
+                      Icons.person_outline,
+                      size: size * 0.50,
+                      color: Colors.black87,
+                    ),
+                  ),
+                )
+              : Icon(
+                  Icons.person_outline,
+                  size: size * 0.50,
+                  color: Colors.black87,
+                ),
         ),
       ),
     );

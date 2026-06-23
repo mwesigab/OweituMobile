@@ -1,0 +1,4 @@
+/home/joshua/Desktop/Oweitu Mobile App/OweituMobile/android/app/.cxx/Debug/5n1y6x1b/x86_64/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/foo.dir
+/home/joshua/Desktop/Oweitu Mobile App/OweituMobile/android/app/.cxx/Debug/5n1y6x1b/x86_64/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/boo.dir
+/home/joshua/Desktop/Oweitu Mobile App/OweituMobile/android/app/.cxx/Debug/5n1y6x1b/x86_64/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/edit_cache.dir
+/home/joshua/Desktop/Oweitu Mobile App/OweituMobile/android/app/.cxx/Debug/5n1y6x1b/x86_64/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/rebuild_cache.dir
