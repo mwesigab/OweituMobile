@@ -12,7 +12,7 @@ pubspec.lock
 *.g.dart
 *.freezed.dart
 
-# Android
+# Android - CRITICAL: Exclude build folders
 android/app/build/
 android/app/.cxx/
 android/.gradle/
