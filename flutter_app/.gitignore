@@ -1,0 +1,233 @@
+cat > .gitignore << 'EOF'
+# ========================================
+# FLUTTER / DART
+# ========================================
+
+# Flutter/Dart build artifacts
+build/
+.dart_tool/
+.pub/
+.pub-cache/
+pubspec.lock
+
+# Flutter specific
+.flutter-plugins
+.flutter-plugins-dependencies
+.flutter-version
+.ios/
+.android/
+
+# Flutter generated files
+*.g.dart
+*.freezed.dart
+*.reflectable.dart
+*.json_serializable.dart
+
+# ========================================
+# ANDROID
+# ========================================
+
+# Android build artifacts
+android/app/build/
+android/app/.cxx/
+android/.gradle/
+android/build/
+android/local.properties
+android/app/debug/
+android/app/profile/
+android/app/release/
+
+# Android native files
+*.apk
+*.aab
+*.dex
+*.so
+*.o
+*.class
+
+# Android generated files
+android/app/src/main/res/values/strings.xml
+android/app/src/main/AndroidManifest.xml
+
+# Android Keystore
+*.keystore
+*.jks
+key.properties
+
+# ========================================
+# iOS / macOS
+# ========================================
+
+# iOS build artifacts
+ios/Pods/
+ios/Podfile.lock
+ios/.symlinks/
+ios/Flutter/App.framework
+ios/Flutter/Flutter.framework
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_assets/
+ios/Flutter/Flutter.podspec
+
+# iOS generated
+ios/Runner/GeneratedPluginRegistrant.*
+ios/Runner/Info.plist
+ios/Runner.xcworkspace/xcshareddata/
+ios/Runner.xcworkspace/xcuserdata/
+
+# macOS
+macos/Pods/
+macos/Podfile.lock
+macos/.symlinks/
+macos/Flutter/GeneratedPluginRegistrant.swift
+macos/Flutter/ephemeral/
+macos/Runner.xcworkspace/xcshareddata/
+macos/Runner.xcworkspace/xcuserdata/
+
+# ========================================
+# WEB
+# ========================================
+
+web/
+.web_bundle/
+.webpack/
+
+# ========================================
+# WINDOWS / LINUX
+# ========================================
+
+windows/flutter/ephemeral/
+windows/flutter/generated_plugin_registrant.cc
+windows/flutter/generated_plugins.cmake
+windows/CMakeLists.txt.user
+
+linux/flutter/ephemeral/
+linux/CMakeLists.txt.user
+
+# ========================================
+# IDE / EDITOR
+# ========================================
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+*.swp
+*.swo
+.gradle/
+gradle-wrapper.properties
+gradle.properties
+
+# VS Code
+.vscode/
+.vscode/settings.json
+
+# Xcode
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcscheme
+xcuserdata/
+DerivedData/
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# ========================================
+# OS / SYSTEM
+# ========================================
+
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.tmp
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# ========================================
+# DEPENDENCIES / PACKAGES
+# ========================================
+
+node_modules/
+package-lock.json
+yarn.lock
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ========================================
+# SECURITY / ENVIRONMENT
+# ========================================
+
+# Firebase
+google-services.json
+GoogleService-Info.plist
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+*.env.local
+
+# Secrets
+*.pem
+*.p12
+*.keystore
+key.properties
+secrets.dart
+
+# ========================================
+# TESTING / COVERAGE
+# ========================================
+
+# Coverage
+coverage/
+.coverage/
+lcov.info
+
+# Testing artifacts
+*.test.dart
+*.golden.dart
+.test_failures/
+.flutter_test_config
+
+# ========================================
+# OBFUSCATION / SYMBOLICATION
+# ========================================
+
+app.*.symbols
+app.*.map.json
+
+# ========================================
+# MISC
+# ========================================
+
+# Archive files
+*.zip
+*.tar
+*.gz
+*.rar
+*.7z
+
+# Backup files
+*.backup
+*.bak
+*~
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+.cache/
+EOF
